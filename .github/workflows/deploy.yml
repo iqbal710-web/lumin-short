@@ -30,7 +30,9 @@ jobs:
           for f in cube grade looks media scopes transform; do cp "$f.ts" app/src/lib/; done
           cp editor.ts app/src/state/
           cp cn.ts app/src/utils/
-          cp raw-mountain.jpg raw-portrait.jpg raw-street.jpg app/src/assets/samples/
+           cp raw-mountain.jpg app/src/assets/samples/mountain.jpg
+          cp raw-street.jpg app/src/assets/samples/street.jpg
+          cp raw-portrait.jpg app/src/assets/samples/portrait.jpg     
 
       - uses: actions/setup-node@v5
         with:
