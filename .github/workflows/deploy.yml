@@ -19,17 +19,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Unzip project
-        run: unzip -q -o build-professional-photo-editor-github_2_.zip -d app
+
+      - name: Arrange files into folders
+        run: |
+          mkdir -p app/src/components app/src/gl app/src/lib app/src/state app/src/utils app/src/assets/samples
+          for f in index.html package.json tsconfig.json vite.config.ts; do cp "$f" app/; done
+          for f in App.tsx main.tsx hooks.ts index.css types.ts vite-env.d.ts; do cp "$f" app/src/; done
+          for f in ColorPage CurvesPalette DeliverPage LeftPanel MediaPage Modals NodeEditor Scopes SliderPalettes TopBar Viewer WheelsPalette ui; do cp "$f.tsx" app/src/components/; done
+          cp Renderer.ts shaders.ts app/src/gl/
+          for f in cube grade looks media scopes transform; do cp "$f.ts" app/src/lib/; done
+          cp editor.ts app/src/state/
+          cp cn.ts app/src/utils/
+          cp raw-mountain.jpg raw-portrait.jpg raw-street.jpg app/src/assets/samples/
+
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+
       - name: Install
         run: npm install
         working-directory: app
+
       - name: Build
         run: npm run build -- --base=./
         working-directory: app
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
