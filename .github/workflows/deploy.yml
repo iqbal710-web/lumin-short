@@ -19,16 +19,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Unzip project
+        run: unzip -q -o build-professional-photo-editor-github_2_.zip -d app
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run build -- --base=./
+      - name: Install
+        run: npm install
+        working-directory: app
+      - name: Build
+        run: npm run build -- --base=./
+        working-directory: app
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: ./dist
+          path: ./app/dist
 
   deploy:
     needs: build
