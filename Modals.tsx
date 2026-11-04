@@ -1,386 +1,341 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { cn } from "@/utils/cn";
-import { Btn, Kbd, ProSlider, SegTabs, Tag } from "./ui";
-import { IconCheck, IconDownload, IconGithub, IconKeyboard, IconSave, IconX } from "./Icons";
+import { useEffect, useState, type ReactNode } from 'react';
+import { Check, Copy, ExternalLink, Info, Keyboard, X, Rocket, TriangleAlert } from 'lucide-react';
+import type { ModalId } from '../types';
+import { GithubMark, IconBtn, Kbd, Logo } from './ui';
+import { cn } from '../utils/cn';
 
-/* --------------------------------------------------------------- shell */
-
-export function Modal({
-  open,
-  onClose,
-  title,
-  subtitle,
-  icon,
-  children,
-  width = 620,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  subtitle?: string;
-  icon?: ReactNode;
-  children: ReactNode;
-  width?: number;
-}) {
+function ModalShell({ title, icon, onClose, children, wide }: { title: string; icon: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
-    if (!open) return;
-    const k = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", k);
-    return () => window.removeEventListener("keydown", k);
-  }, [open, onClose]);
-
-  if (!open) return null;
+    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fade-in absolute inset-0 backdrop-blur-[3px]" onClick={onClose} style={{ background: "rgba(4,5,7,.84)" }} />
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm" onMouseDown={onClose}>
       <div
-        className="pop-in relative flex max-h-[86vh] w-full flex-col overflow-hidden rounded-[10px] border border-line bg-panel shadow-[0_50px_120px_-40px_#000]"
-        style={{ maxWidth: width }}
+        onMouseDown={(e) => e.stopPropagation()}
+        className={cn('animate-in flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-ink-600 bg-ink-800 shadow-2xl', wide ? 'max-w-3xl' : 'max-w-xl')}
       >
-        <div className="flex items-center gap-2.5 border-b border-line bg-base/60 px-4 py-3">
-          {icon && <span className="text-amber">{icon}</span>}
-          <div className="min-w-0">
-            <h3 className="font-display text-[13px] font-semibold tracking-[0.06em] text-txt">{title}</h3>
-            {subtitle && <p className="truncate text-[10.5px] text-faint">{subtitle}</p>}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="ml-auto flex h-6 w-6 items-center justify-center rounded-[5px] border border-line text-dim transition-colors hover:border-flame/50 hover:text-flame"
-          >
-            <IconX width={12} height={12} />
-          </button>
+        <div className="flex items-center justify-between border-b border-ink-700 px-5 py-3.5">
+          <h2 className="flex items-center gap-2 text-[14px] font-semibold text-ink-100">
+            {icon}
+            {title}
+          </h2>
+          <IconBtn title="Close (Esc)" onClick={onClose}>
+            <X size={16} />
+          </IconBtn>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
       </div>
     </div>
   );
 }
 
-/* -------------------------------------------------------------- export */
-
-export type ExportOpts = {
-  format: "image/png" | "image/jpeg" | "image/webp";
-  quality: number;
-  scale: number;
-  filename: string;
-};
-
-export function ExportModal({
-  open,
-  onClose,
-  name,
-  imgW,
-  imgH,
-  onExport,
-  onSaveProject,
-  busy,
-}: {
-  open: boolean;
-  onClose: () => void;
-  name: string;
-  imgW: number;
-  imgH: number;
-  onExport: (o: ExportOpts) => void;
-  onSaveProject: () => void;
-  busy: boolean;
-}) {
-  const [format, setFormat] = useState<ExportOpts["format"]>("image/png");
-  const [quality, setQuality] = useState(0.92);
-  const [scale, setScale] = useState(1);
-  const [filename, setFilename] = useState(`${name}-graded`);
-
-  useEffect(() => {
-    if (open) setFilename(`${name}-graded`);
-  }, [name, open]);
-
-  const ext = format === "image/png" ? "png" : format === "image/webp" ? "webp" : "jpg";
-  const ow = Math.round(imgW * scale);
-  const oh = Math.round(imgH * scale);
-
+function CodeBlock({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Deliver / Export"
-      subtitle="Render the full node chain at output resolution"
-      icon={<IconDownload width={15} height={15} />}
-      width={560}
-    >
-      <div className="space-y-4 p-4">
-        <div>
-          <Label>Format</Label>
-          <SegTabs
-            items={[
-              { id: "image/png", label: "PNG · lossless" },
-              { id: "image/jpeg", label: "JPEG" },
-              { id: "image/webp", label: "WebP" },
-            ]}
-            value={format}
-            onChange={(v) => setFormat(v as ExportOpts["format"])}
-          />
-        </div>
-
-        {format !== "image/png" && (
-          <div>
-            <Label>Compression quality</Label>
-            <ProSlider
-              label="Quality"
-              value={quality}
-              min={0.4}
-              max={1}
-              step={0.01}
-              def={0.92}
-              digits={2}
-              bipolar={false}
-              onChange={setQuality}
-            />
-          </div>
-        )}
-
-        <div>
-          <Label>Output size</Label>
-          <div className="flex flex-wrap gap-1">
-            {[0.25, 0.5, 1, 1.5, 2].map((s) => (
-              <Btn key={s} size="sm" variant="outline" active={scale === s} onClick={() => setScale(s)}>
-                {s === 1 ? "100%" : `${Math.round(s * 100)}%`}
-              </Btn>
-            ))}
-          </div>
-          <p className="mt-1.5 tabular font-mono text-[10px] text-dim">
-            {ow} × {oh} px <span className="text-faint">· from {imgW}×{imgH}</span>
-            {ow * oh > 24_000_000 && <span className="ml-2 text-flame">large render</span>}
-          </p>
-        </div>
-
-        <div>
-          <Label>File name</Label>
-          <div className="flex items-center gap-2 rounded-[6px] border border-line bg-base/60 px-2.5 py-1.5 focus-within:border-amber/60">
-            <input
-              value={filename}
-              onChange={(e) => setFilename(e.target.value)}
-              className="min-w-0 flex-1 bg-transparent text-[12px] text-txt outline-none"
-              spellCheck={false}
-            />
-            <span className="font-mono text-[11px] text-faint">.{ext}</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 border-t border-line pt-3">
-          <Btn
-            variant="solid"
-            size="md"
-            disabled={busy}
-            onClick={() => onExport({ format, quality, scale, filename: `${filename.replace(/\.[^.]+$/, "")}.${ext}` })}
-            icon={<IconDownload width={14} height={14} />}
-            className={cn(busy && "sweep relative overflow-hidden")}
-          >
-            {busy ? "Rendering…" : "Render & download"}
-          </Btn>
-          <Btn variant="outline" size="md" onClick={onSaveProject} icon={<IconSave width={14} height={14} />}>
-            Save project .json
-          </Btn>
-          <span className="ml-auto">
-            <Tag tone="teal">GPU render</Tag>
-          </span>
-        </div>
-      </div>
-    </Modal>
+    <div className="group relative mt-2 overflow-hidden rounded-lg bg-ink-950 ring-1 ring-ink-650">
+      <pre className="overflow-x-auto p-3 pr-12 font-mono text-[11.5px] leading-relaxed text-emerald-200">{code}</pre>
+      <button
+        type="button"
+        onClick={() => {
+          navigator.clipboard?.writeText(code).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1400);
+          });
+        }}
+        className="absolute right-2 top-2 flex items-center gap-1 rounded-md bg-ink-700 px-2 py-1 text-[10px] text-ink-200 ring-1 ring-ink-600 transition hover:bg-ink-600"
+      >
+        {copied ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
   );
 }
 
-function Label({ children }: { children: ReactNode }) {
-  return (
-    <p className="mb-1.5 font-display text-[10px] font-semibold tracking-[0.16em] text-dim uppercase">
-      {children}
-    </p>
-  );
-}
-
-/* ----------------------------------------------------------- shortcuts */
-
-const KEYS: [string, string][] = [
-  ["\\", "Toggle A/B compare wipe"],
-  ["Y", "Hold / show original"],
-  ["1 … 5", "Jump to tool node"],
-  ["B", "Bypass current node"],
-  ["R", "Reset current node"],
-  ["0", "Reset entire grade"],
-  ["F", "Fit image to viewer"],
-  ["+ / −", "Zoom in / out"],
-  ["Alt + drag", "Pan the viewer"],
-  ["Ctrl/⌘ + Z", "Undo"],
-  ["Ctrl/⌘ + ⇧ + Z", "Redo"],
-  ["Ctrl/⌘ + E", "Export render"],
-  ["Ctrl/⌘ + O", "Import images"],
-  ["G / S", "Thirds grid / safe areas"],
-  ["?", "This panel"],
+const SHORTCUTS: [string, string][] = [
+  ['Ctrl + Z / Ctrl + Shift + Z', 'Undo / Redo'],
+  ['Alt + S', 'Add serial node'],
+  ['Ctrl + D', 'Enable / disable selected node'],
+  ['Delete', 'Delete selected node'],
+  ['Shift + D', 'Bypass all grades (show original)'],
+  ['W', 'Split wipe before / after'],
+  ['H', 'Show highlight / shadow clipping'],
+  ['C', 'Crop tool (Enter = done)'],
+  ['R / Shift + R', 'Rotate 90° right / left'],
+  ['F', 'Cinema viewer'],
+  ['↑ / ↓', 'Previous / next clip'],
+  ['1 – 5', 'Wheels · Curves · Adjust · Effects · Sizing'],
+  ['Ctrl + C / Ctrl + V', 'Copy / paste grade between images'],
+  ['Ctrl + Alt + G', 'Grab still to gallery'],
+  ['Ctrl + O', 'Import images'],
+  ['Ctrl + E', 'Quick export current image'],
+  ['Mouse wheel / drag', 'Zoom / pan the viewer'],
+  ['Double-click a control', 'Reset it to default'],
+  ['Shift + drag', 'Fine adjustment on wheels & scrubbers'],
+  ['?', 'This help'],
 ];
 
-export function ShortcutsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+function ShortcutsModal({ onClose }: { onClose: () => void }) {
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Keyboard & mouse"
-      subtitle="Built for two-hand grading"
-      icon={<IconKeyboard width={15} height={15} />}
-      width={560}
-    >
-      <div className="grid grid-cols-1 gap-x-6 gap-y-0 p-4 sm:grid-cols-2">
-        {KEYS.map(([k, d], i) => (
-          <div
-            key={k}
-            className={cn(
-              "flex items-center gap-2.5 border-b border-line/60 py-[7px]",
-              i < 2 && "border-t border-line/60 sm:border-t-0",
-            )}
-          >
-            <span className="flex shrink-0 gap-1">
-              {k.split(" ").map((part, j) =>
-                part === "+" || part === "/" || part === "…" ? (
-                  <span key={j} className="text-[10px] text-faint">
-                    {part}
-                  </span>
-                ) : (
-                  <Kbd key={j}>{part}</Kbd>
-                ),
-              )}
+    <ModalShell title="Keyboard shortcuts" icon={<Keyboard size={16} className="text-accent" />} onClose={onClose}>
+      <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+        {SHORTCUTS.map(([k, d]) => (
+          <div key={k} className="flex items-center justify-between gap-3 border-b border-ink-700/60 py-1.5">
+            <span className="text-[12px] text-ink-300">{d}</span>
+            <span className="flex shrink-0 flex-wrap justify-end gap-1">
+              {k.split(' / ').map((part) => (
+                <Kbd key={part}>{part}</Kbd>
+              ))}
             </span>
-            <span className="text-[11px] text-dim">{d}</span>
           </div>
         ))}
       </div>
-      <p className="px-4 pb-4 text-[10.5px] text-faint">
-        Sliders &amp; wheels: drag to adjust, <span className="text-dim">Shift</span> for fine steps,
-        double-click to reset a single control.
-      </p>
-    </Modal>
+    </ModalShell>
   );
 }
 
-/* --------------------------------------------------------------- deploy */
+export const WORKFLOW_YAML = `name: Deploy to GitHub Pages
 
-type Step = { title: string; body: string; code?: string; note?: string };
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-const STEPS: Step[] = [
-  {
-    title: "লোকাল প্রজেক্ট রেডি করুন",
-    body: "টার্মিনাল খুলে প্রজেক্ট ফোল্ডারে ঢুকে ডিপেন্ডেন্সি ইনস্টল করুন, তারপর একবার বিল্ড চালিয়ে নিশ্চিত হোন সবকিছু ঠিক আছে।",
-    code: "npm install\nnpm run build\nnpm run preview",
-    note: "preview চললে http://localhost:4173 এ অ্যাপ দেখা যাবে।",
-  },
-  {
-    title: "GitHub-এ নতুন রিপোজিটরি",
-    body: "github.com → New repository → নাম দিন (যেমন lumen-grade) → Public → Create। এরপর লোকাল ফোল্ডারকে গিট রিপো বানিয়ে পুশ করুন।",
-    code: 'git init\ngit add .\ngit commit -m "feat: LUMEN Grade photo editor"\ngit branch -M main\ngit remote add origin https://github.com/<username>/lumen-grade.git\ngit push -u origin main',
-  },
-  {
-    title: "GitHub Actions দিয়ে অটো ডিপ্লয়",
-    body: "এই প্রজেক্টে .github/workflows/deploy.yml আগে থেকেই যোগ করা আছে — push করলেই GitHub Pages-এ বিল্ড পাবলিশ হয়ে যাবে। শুধু রিপো সেটিংস ঠিক করুন:",
-    code: "Repo → Settings → Pages → Build and deployment → Source: GitHub Actions",
-    note: "ব্যস! এরপর main ব্রাঞ্চে push করলেই Actions ট্যাবে বিল্ড চলবে।",
-  },
-  {
-    title: "বেস পাথ (খুব জরুরি)",
-    body: "রিপো নাম অনুযায়ী অ্যাপ সাব-পাথে সার্ভ হয়, তাই বিল্ডের সময় base ঠিক করে দিতে হয়। এটি vite.config.ts এডিট না করেই CLI দিয়ে করা যায়:",
-    code: "npx vite build --base=/lumen-grade/",
-    note: "workflow ফাইলে এই কমান্ডটিই সেট করা আছে — <REPO> জায়গায় আপনার রিপো নাম বসবে।",
-  },
-  {
-    title: "ঘরোয়া বিকল্প: gh-pages প্যাকেজ",
-    body: "Actions ব্যবহার না করতে চাইলে এক লাইনেই ডিপ্লয় করা যায়:",
-    code: "npm i -D gh-pages\nnpx vite build --base=/lumen-grade/\nnpx gh-pages -d dist",
-    note: "তখন Settings → Pages → Source: Deploy from a branch → gh-pages / root।",
-  },
-  {
-    title: "লাইভ URL ও কাস্টম ডোমেইন",
-    body: "ডিপ্লয় শেষ হলে সাইট লাইভ হবে এই ঠিকানায়। নিজের ডোমেইন যুক্ত করতে চাইলে repo-তে CNAME ফাইল দিন।",
-    code: "https://<username>.github.io/lumen-grade/\n# custom domain:\necho grade.example.com > public/CNAME",
-  },
-  {
-    title: "পরবর্তী আপডেট",
-    body: "কোড বদলালে শুধু কমিট ও পুশ — বাকিটা Actions নিজেই করে দেবে।",
-    code: 'git add .\ngit commit -m "update: new look pack"\ngit push',
-  },
-];
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
-export function DeployModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [copied, setCopied] = useState(-1);
-  const copy = async (text: string, i: number) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(i);
-      setTimeout(() => setCopied(-1), 1600);
-    } catch {
-      setCopied(-1);
-    }
-  };
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build -- --base=./
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: \${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+`;
+
+function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="GitHub Pages-এ পাবলিশ — ধাপে ধাপে"
-      subtitle="LUMEN Grade deploy guide · zero backend needed"
-      icon={<IconGithub width={16} height={16} />}
-      width={680}
-    >
-      <div className="space-y-2.5 p-4">
-        {STEPS.map((st, i) => (
-          <div
-            key={i}
-            className="rise-in overflow-hidden rounded-[8px] border border-line bg-base/45"
-            style={{ animationDelay: `${i * 45}ms` }}
-          >
-            <div className="flex items-start gap-2.5 px-3 pt-2.5">
-              <span className="mt-[1px] flex h-[19px] w-[19px] shrink-0 items-center justify-center rounded-[5px] border border-amber/40 bg-amber/10 font-mono text-[10px] text-amber">
-                {i + 1}
-              </span>
-              <div className="min-w-0 flex-1">
-                <h4 className="font-display text-[12px] font-semibold tracking-wide text-txt">{st.title}</h4>
-                <p className="mt-0.5 text-[11px] leading-relaxed text-dim">{st.body}</p>
-              </div>
-            </div>
-            {st.code && (
-              <div className="group relative mx-3 mt-2 overflow-hidden rounded-[6px] border border-line bg-[#080a0d]">
-                <pre className="overflow-x-auto px-3 py-2 font-mono text-[10.5px] leading-[1.65] text-teal/90">
-                  {st.code}
-                </pre>
-                <button
-                  type="button"
-                  onClick={() => copy(st.code!, i)}
-                  className={cn(
-                    "absolute top-1.5 right-1.5 flex h-[20px] items-center gap-1 rounded-[4px] border px-1.5 font-mono text-[9px] tracking-wider uppercase transition-all",
-                    copied === i
-                      ? "border-lime/50 bg-lime/12 text-lime"
-                      : "border-line2 bg-panel text-faint opacity-0 group-hover:opacity-100 hover:text-txt",
-                  )}
-                >
-                  {copied === i ? <IconCheck width={10} height={10} /> : null}
-                  {copied === i ? "copied" : "copy"}
-                </button>
-              </div>
-            )}
-            {st.note && (
-              <p className="px-3 pt-1.5 pb-2.5 text-[10px] text-faint">
-                <span className="mr-1 text-amber">›</span>
-                {st.note}
-              </p>
-            )}
-          </div>
-        ))}
-        <div className="rounded-[8px] border border-teal/25 bg-teal/6 p-3">
-          <p className="font-display text-[11px] font-semibold tracking-[0.14em] text-teal uppercase">
-            কেন এটি স্ট্যাটিক সাইট?
-          </p>
-          <p className="mt-1 text-[11px] leading-relaxed text-dim">
-            সম্পূর্ণ এডিটর ব্রাউজারের WebGL-এ চলে — কোনো সার্ভার বা ডেটাবেস লাগে না। তাই GitHub Pages,
-            Netlify, Cloudflare Pages, Vercel — যেকোনো স্ট্যাটিক হোস্টেই হুবহু একইভাবে কাজ করবে।
-          </p>
+    <div className="relative flex gap-3.5 pb-5">
+      <div className="flex flex-col items-center">
+        <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-b from-accent-2 to-accent text-[12px] font-bold text-white shadow-[0_4px_12px_-3px_rgba(255,107,61,0.7)]">
+          {n}
+        </div>
+        <div className="mt-1 w-px flex-1 bg-ink-650" />
+      </div>
+      <div className="min-w-0 flex-1 pt-0.5">
+        <h3 className="text-[13.5px] font-semibold text-ink-100">{title}</h3>
+        <div className="mt-1 space-y-1.5 text-[12.5px] leading-relaxed text-ink-300">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+const A = ({ href, children }: { href: string; children: ReactNode }) => (
+  <a href={href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-accent-2 underline-offset-2 hover:underline">
+    {children}
+    <ExternalLink size={10} />
+  </a>
+);
+
+function GithubGuideModal({ onClose }: { onClose: () => void }) {
+  const [user, setUser] = useState('YOUR-USERNAME');
+  const [repo, setRepo] = useState('chroma-studio');
+  const u = user.trim() || 'YOUR-USERNAME';
+  const r = repo.trim().replace(/\s+/g, '-') || 'chroma-studio';
+  const site = `https://${u}.github.io/${r}/`;
+
+  return (
+    <ModalShell title="Deploy this website to GitHub Pages: step by step" icon={<GithubMark size={16} />} onClose={onClose} wide>
+      <div className="mb-4 rounded-xl border border-accent/30 bg-accent/10 p-3.5 text-[12.5px] leading-relaxed text-ink-200">
+        <b className="text-ink-100">Free hosting with GitHub Pages.</b> Ei guide follow korle 10–15 minute er moddhe apnar photo editor website live hoye jabe. Niche nijer
+        GitHub username ar repository name likhun, commands gulo automatic update hobe.
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <label className="text-[11px] text-ink-300">
+            GitHub username
+            <input value={user} onChange={(e) => setUser(e.target.value)} className="mt-1 h-8 w-full rounded-md bg-ink-950 px-2 font-mono text-[12px] text-ink-100 outline-none ring-1 ring-ink-600 focus:ring-accent/60" />
+          </label>
+          <label className="text-[11px] text-ink-300">
+            Repository name
+            <input value={repo} onChange={(e) => setRepo(e.target.value)} className="mt-1 h-8 w-full rounded-md bg-ink-950 px-2 font-mono text-[12px] text-ink-100 outline-none ring-1 ring-ink-600 focus:ring-accent/60" />
+          </label>
         </div>
       </div>
-    </Modal>
+
+      <Step n={1} title="Install the tools (one time only)">
+        <p>
+          Install <A href="https://nodejs.org">Node.js (LTS)</A> and <A href="https://git-scm.com/downloads">Git</A>, and create a free account at <A href="https://github.com/signup">github.com</A>. Then open a terminal (Windows: PowerShell) and check:
+        </p>
+        <CodeBlock code={`node -v\nnpm -v\ngit --version`} />
+      </Step>
+
+      <Step n={2} title="Get the project code on your computer">
+        <p>
+          Download this project as a <b>ZIP</b> from the builder (Download / Export code), extract it, and open the folder in <A href="https://code.visualstudio.com">VS Code</A>. Open the terminal <b>inside the project folder</b> (VS Code → Terminal → New Terminal).
+        </p>
+      </Step>
+
+      <Step n={3} title="Test it locally">
+        <CodeBlock code={`npm install\nnpm run dev`} />
+        <p>
+          Open <span className="font-mono text-ink-100">http://localhost:5173</span> in the browser. If the editor works, press <Kbd>Ctrl + C</Kbd> in the terminal to stop it.
+        </p>
+      </Step>
+
+      <Step n={4} title="Create a new repository on GitHub">
+        <p>
+          On GitHub click <b>+</b> (top-right) → <b>New repository</b>. Name it <span className="font-mono text-ink-100">{r}</span>, choose <b>Public</b>, and do <b>not</b> tick "Add a README". Then click <b>Create repository</b>.
+        </p>
+      </Step>
+
+      <Step n={5} title="Tell Git who you are (first time only)">
+        <CodeBlock code={`git config --global user.name "Your Name"\ngit config --global user.email "you@example.com"`} />
+      </Step>
+
+      <Step n={6} title="Upload (push) the code to GitHub">
+        <CodeBlock
+          code={`git init\ngit add .\ngit commit -m "Initial commit: Chroma Studio photo editor"\ngit branch -M main\ngit remote add origin https://github.com/${u}/${r}.git\ngit push -u origin main`}
+        />
+        <p>
+          If Git asks you to log in, choose <b>Sign in with your browser</b>. If it asks for a password, paste a <b>Personal Access Token</b> instead (GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) → tick <span className="font-mono">repo</span>).
+        </p>
+      </Step>
+
+      <Step n={7} title="Turn on GitHub Pages">
+        <p>
+          In your repository open <b>Settings</b> → <b>Pages</b>. Under <b>Build and deployment</b> → <b>Source</b>, select <b className="text-accent-2">GitHub Actions</b>.
+        </p>
+        <p>
+          This project already contains <span className="font-mono text-ink-100">.github/workflows/deploy.yml</span>, so GitHub builds and publishes the site automatically. (If the file is missing, create it with <b>Add file → Create new file</b> and paste this:)
+        </p>
+        <details className="rounded-lg bg-ink-900 p-2 ring-1 ring-ink-650">
+          <summary className="cursor-pointer text-[12px] text-ink-200">Show deploy.yml</summary>
+          <CodeBlock code={WORKFLOW_YAML} />
+        </details>
+      </Step>
+
+      <Step n={8} title="Wait for the green check ✓">
+        <p>
+          Open the <b>Actions</b> tab. The workflow "Deploy to GitHub Pages" runs for about 1–3 minutes. When it shows a green ✓ your site is live.
+        </p>
+      </Step>
+
+      <Step n={9} title="Open your live website 🎉">
+        <a href={site} target="_blank" rel="noreferrer" className="mt-1 flex items-center justify-between gap-2 rounded-lg bg-ink-950 px-3 py-2.5 font-mono text-[12.5px] text-emerald-300 ring-1 ring-emerald-500/30 hover:ring-emerald-400/60">
+          {site}
+          <ExternalLink size={13} />
+        </a>
+      </Step>
+
+      <Step n={10} title="Update the site later">
+        <p>Make your changes, then run these three commands. Every push redeploys automatically.</p>
+        <CodeBlock code={`git add .\ngit commit -m "Update photo editor"\ngit push`} />
+      </Step>
+
+      <div className="mt-1 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[12.5px] font-semibold text-amber-200">
+          <TriangleAlert size={14} /> Troubleshooting
+        </div>
+        <ul className="list-disc space-y-1 pl-5 text-[12px] leading-relaxed text-ink-300">
+          <li>
+            <b>404 page</b>: check that Settings → Pages → Source is set to "GitHub Actions", then wait 2–5 minutes.
+          </li>
+          <li>
+            <b>Blank page</b>: keep <span className="font-mono">npm run build -- --base=./</span> in the workflow (already set), so it works in any repo name.
+          </li>
+          <li>
+            <b>Action failed</b>: open the failed run in the Actions tab to read the log, and make sure <span className="font-mono">package-lock.json</span> was pushed.
+          </li>
+          <li>
+            <b>push rejected</b>: run <span className="font-mono">git pull origin main --rebase</span> and then <span className="font-mono">git push</span>.
+          </li>
+          <li>
+            <b>No terminal?</b> On GitHub use <b>Add file → Upload files</b>, drag in every file except <span className="font-mono">node_modules</span> and <span className="font-mono">dist</span>, then do Steps 7–9.
+          </li>
+          <li>
+            <b>Custom domain</b>: Settings → Pages → Custom domain (e.g. <span className="font-mono">photo.yourname.com</span>).
+          </li>
+        </ul>
+      </div>
+    </ModalShell>
   );
+}
+
+function AboutModal({ onClose }: { onClose: () => void }) {
+  const features = [
+    'Serial node graph like DaVinci Resolve (enable, reorder by adding, key mix)',
+    'Lift / Gamma / Gain / Offset color wheels with master jog wheels',
+    'Primaries: temperature, tint, contrast + pivot, mid-detail, color boost',
+    'Custom Y/R/G/B curves + Hue vs Hue / Sat / Lum curves',
+    'Real 3D LUT support: import .cube, export your grade as .cube',
+    'Scopes: RGB parade, waveform, vectorscope, histogram',
+    'Crop with aspect presets, straighten, rotate & flip',
+    'Vignette, film grain, sharpen, clarity and blur',
+    'Before/after wipe, bypass, clipping warnings, pixel probe',
+    'Gallery stills, copy/paste grades, unlimited undo',
+    'Full-resolution JPEG / PNG / WebP export + batch ZIP',
+  ];
+  return (
+    <ModalShell title="About Chroma Studio" icon={<Info size={16} className="text-accent" />} onClose={onClose}>
+      <div className="flex items-center gap-3">
+        <Logo size={44} />
+        <div>
+          <div className="text-[16px] font-semibold text-ink-100">Chroma Studio 1.0</div>
+          <div className="text-[12px] text-ink-400">A professional color grading photo editor that runs in your browser.</div>
+        </div>
+      </div>
+      <p className="mt-3 text-[12.5px] leading-relaxed text-ink-300">
+        Every pixel is processed on your GPU with WebGL2 in a 16-bit floating-point pipeline. Your photos never leave your computer. Inspired by the DaVinci Resolve color page.
+      </p>
+      <ul className="mt-3 grid gap-1.5">
+        {features.map((f) => (
+          <li key={f} className="flex items-start gap-2 text-[12px] text-ink-200">
+            <Check size={13} className="mt-0.5 shrink-0 text-accent" />
+            {f}
+          </li>
+        ))}
+      </ul>
+      <div className="mt-4 flex items-center gap-2 rounded-lg bg-ink-900 p-3 text-[11.5px] text-ink-400 ring-1 ring-ink-650">
+        <Rocket size={14} className="text-accent" /> Built with React, TypeScript, Tailwind CSS, Vite & WebGL2.
+      </div>
+    </ModalShell>
+  );
+}
+
+export function Modals({ modal, onClose }: { modal: ModalId | null; onClose: () => void }) {
+  if (modal === 'shortcuts') return <ShortcutsModal onClose={onClose} />;
+  if (modal === 'github') return <GithubGuideModal onClose={onClose} />;
+  if (modal === 'about') return <AboutModal onClose={onClose} />;
+  return null;
 }

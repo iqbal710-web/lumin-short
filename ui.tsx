@@ -1,52 +1,280 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { cn } from "@/utils/cn";
-import { IconChevron, IconReset } from "./Icons";
-import { clamp } from "@/editor/types";
+import { useRef, useState, type ReactNode } from 'react';
+import { cn } from '../utils/cn';
 
-/* ---------------------------------------------------------------- Btn */
+const clampN = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+const snap = (v: number, step: number) => Math.round(v / step) * step;
+export const decimalsFor = (step: number) => (step >= 1 ? 0 : Math.min(3, Math.ceil(-Math.log10(step) - 1e-9)));
 
-type BtnProps = {
-  children?: ReactNode;
-  onClick?: () => void;
-  variant?: "solid" | "ghost" | "outline" | "danger";
-  size?: "xs" | "sm" | "md";
-  active?: boolean;
+export const RAINBOW =
+  'linear-gradient(90deg,hsl(0 85% 55%),hsl(60 85% 55%),hsl(120 75% 45%),hsl(180 80% 45%),hsl(240 80% 60%),hsl(300 80% 55%),hsl(360 85% 55%))';
+
+/* ------------------------------------------------------------------ */
+export interface SliderProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  defaultValue?: number;
+  onChange: (v: number, transient: boolean) => void;
+  format?: (v: number) => string;
+  gradient?: string;
   disabled?: boolean;
-  title?: string;
-  className?: string;
-  icon?: ReactNode;
-};
+  hint?: string;
+  compact?: boolean;
+}
 
-export function Btn({
-  children,
+export function Slider({ label, value, min, max, step = 1, defaultValue = 0, onChange, format, gradient, disabled, hint, compact }: SliderProps) {
+  const track = useRef<HTMLDivElement>(null);
+  const drag = useRef<number | null>(null);
+  const done = useRef(false);
+  const [editing, setEditing] = useState(false);
+  const dec = decimalsFor(step);
+  const fmt = format ?? ((v: number) => v.toFixed(dec));
+  const fromX = (clientX: number) => {
+    const r = track.current!.getBoundingClientRect();
+    const t = clampN((clientX - r.left) / r.width, 0, 1);
+    return clampN(snap(min + t * (max - min), step), min, max);
+  };
+  const end = () => {
+    if (drag.current === null) return;
+    const v = drag.current;
+    drag.current = null;
+    onChange(v, false);
+  };
+  const nudge = (dir: number, big: boolean) => onChange(clampN(snap(value + dir * step * (big ? 10 : 1), step), min, max), false);
+  const commitText = (text: string) => {
+    if (done.current) return;
+    done.current = true;
+    setEditing(false);
+    const v = parseFloat(text);
+    if (Number.isFinite(v)) onChange(clampN(snap(v, step), min, max), false);
+  };
+  const pct = ((clampN(value, min, max) - min) / (max - min)) * 100;
+  const zero = ((clampN(defaultValue, min, max) - min) / (max - min)) * 100;
+  const changed = Math.abs(value - defaultValue) > step * 0.5;
+
+  return (
+    <div
+      className={cn(
+        'group grid items-center gap-2 py-[3px]',
+        compact ? 'grid-cols-[74px_1fr_44px]' : 'grid-cols-[96px_1fr_52px]',
+        disabled && 'pointer-events-none opacity-35',
+      )}
+      title={hint}
+    >
+      <span
+        onDoubleClick={() => onChange(defaultValue, false)}
+        className={cn('cursor-default truncate select-none text-[11px]', changed ? 'text-ink-100' : 'text-ink-300')}
+      >
+        {label}
+      </span>
+      <div
+        ref={track}
+        role="slider"
+        aria-label={label}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        tabIndex={0}
+        className="relative h-5 cursor-pointer touch-none rounded outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const v = fromX(e.clientX);
+          drag.current = v;
+          onChange(v, true);
+        }}
+        onPointerMove={(e) => {
+          if (drag.current === null) return;
+          const v = fromX(e.clientX);
+          if (v !== drag.current) {
+            drag.current = v;
+            onChange(v, true);
+          }
+        }}
+        onPointerUp={end}
+        onPointerCancel={end}
+        onDoubleClick={() => onChange(defaultValue, false)}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            nudge(-1, e.shiftKey);
+          } else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            nudge(1, e.shiftKey);
+          }
+        }}
+      >
+        <div
+          className="absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-ink-650"
+          style={gradient ? { background: gradient, height: 4, opacity: 0.85 } : undefined}
+        />
+        {!gradient && (
+          <div
+            className="absolute top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-accent"
+            style={{ left: `${Math.min(pct, zero)}%`, width: `${Math.abs(pct - zero)}%` }}
+          />
+        )}
+        <div
+          className="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-black/50 bg-ink-100 shadow-md transition-transform group-hover:scale-110"
+          style={{ left: `${pct}%` }}
+        />
+      </div>
+      {editing ? (
+        <input
+          autoFocus
+          defaultValue={String(+value.toFixed(dec))}
+          onFocus={(e) => e.target.select()}
+          onBlur={(e) => commitText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitText((e.target as HTMLInputElement).value);
+            if (e.key === 'Escape') {
+              done.current = true;
+              setEditing(false);
+            }
+          }}
+          className="h-5 w-full rounded bg-ink-950 px-1 text-right font-mono text-[11px] text-ink-100 outline-none ring-1 ring-accent/70"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            done.current = false;
+            setEditing(true);
+          }}
+          title="Click to type a value"
+          className={cn('truncate text-right font-mono text-[11px] tabular-nums hover:text-white', changed ? 'text-accent-2' : 'text-ink-300')}
+        >
+          {fmt(value)}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+export interface ScrubProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  defaultValue?: number;
+  onChange: (v: number, transient: boolean) => void;
+  format?: (v: number) => string;
+}
+
+/** Resolve-style numeric field: drag left/right to change */
+export function Scrub({ label, value, min, max, step = 1, defaultValue = 0, onChange, format }: ScrubProps) {
+  const st = useRef<{ x: number; v: number; last: number; moved: boolean } | null>(null);
+  const fmt = format ?? ((v: number) => v.toFixed(decimalsFor(step)));
+  const changed = Math.abs(value - defaultValue) > step * 0.5;
+  const pct = ((clampN(value, min, max) - min) / (max - min)) * 100;
+  const zero = ((clampN(defaultValue, min, max) - min) / (max - min)) * 100;
+  return (
+    <div className="flex w-[68px] select-none flex-col items-center gap-0.5">
+      <span className={cn('max-w-full truncate text-[10px]', changed ? 'text-ink-200' : 'text-ink-400')}>{label}</span>
+      <div
+        title={`${label}: drag left/right · Shift = fine · double-click = reset`}
+        className={cn(
+          'relative h-[22px] w-full cursor-ew-resize touch-none overflow-hidden rounded bg-ink-950 ring-1 transition-colors',
+          changed ? 'ring-accent/50' : 'ring-ink-650 hover:ring-ink-500',
+        )}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          st.current = { x: e.clientX, v: value, last: value, moved: false };
+        }}
+        onPointerMove={(e) => {
+          const s = st.current;
+          if (!s) return;
+          const dx = e.clientX - s.x;
+          if (!s.moved && Math.abs(dx) < 2) return;
+          s.moved = true;
+          const v = clampN(snap(s.v + (dx * (max - min)) / (e.shiftKey ? 2400 : 380), step), min, max);
+          if (v !== s.last) {
+            s.last = v;
+            onChange(v, true);
+          }
+        }}
+        onPointerUp={() => {
+          const s = st.current;
+          st.current = null;
+          if (s?.moved && s.last !== s.v) onChange(s.last, false);
+        }}
+        onDoubleClick={() => onChange(defaultValue, false)}
+      >
+        <div className="absolute bottom-0 h-[2px] bg-accent/80" style={{ left: `${Math.min(pct, zero)}%`, width: `${Math.abs(pct - zero)}%` }} />
+        <span className={cn('absolute inset-0 flex items-center justify-center font-mono text-[11px] tabular-nums', changed ? 'text-white' : 'text-ink-200')}>
+          {fmt(value)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+export function PanelHeader({ title, icon, children }: { title: string; icon?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-ink-700 bg-ink-800 px-2.5">
+      <div className="flex min-w-0 items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-ink-300">
+        {icon}
+        <span className="truncate">{title}</span>
+      </div>
+      <div className="flex items-center gap-0.5">{children}</div>
+    </div>
+  );
+}
+
+export function IconBtn({
+  title,
   onClick,
-  variant = "ghost",
-  size = "sm",
   active,
   disabled,
-  title,
+  children,
   className,
-  icon,
-}: BtnProps) {
-  const sizes = {
-    xs: "h-6 px-2 text-[10px] gap-1",
-    sm: "h-7 px-2.5 text-[11px] gap-1.5",
-    md: "h-9 px-4 text-[12px] gap-2",
-  }[size];
-  const variants = {
-    solid:
-      "bg-amber text-[#1a1206] font-semibold hover:bg-[#ffb93d] shadow-[0_6px_18px_-8px_rgba(245,165,36,.9)]",
-    outline: "border border-line2 text-txt hover:border-amber/70 hover:text-amber bg-raise/60",
-    ghost: "text-dim hover:text-txt hover:bg-raise2",
-    danger: "text-flame/90 hover:bg-flame/12 hover:text-flame",
-  }[variant];
+}: {
+  title: string;
+  onClick?: () => void;
+  active?: boolean;
+  disabled?: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        'inline-flex h-7 min-w-7 items-center justify-center gap-1 rounded px-1.5 text-ink-300 transition hover:bg-ink-650 hover:text-ink-100 disabled:pointer-events-none disabled:opacity-30',
+        active && 'bg-accent/15 text-accent hover:bg-accent/25 hover:text-accent',
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function Button({
+  children,
+  onClick,
+  variant = 'default',
+  disabled,
+  className,
+  title,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  variant?: 'default' | 'primary' | 'ghost';
+  disabled?: boolean;
+  className?: string;
+  title?: string;
+}) {
   return (
     <button
       type="button"
@@ -54,422 +282,118 @@ export function Btn({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "no-select inline-flex items-center justify-center rounded-[5px] tracking-wide uppercase transition-all duration-150",
-        "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-amber/70",
-        sizes,
-        variants,
-        active && variant !== "solid" && "bg-amber/14 text-amber shadow-[inset_0_0_0_1px_rgba(245,165,36,.32)]",
-        disabled && "pointer-events-none opacity-35",
+        'inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-[12px] font-medium transition disabled:pointer-events-none disabled:opacity-40',
+        variant === 'primary' && 'bg-gradient-to-b from-accent-2 to-accent text-white shadow-[0_4px_14px_-4px_rgba(255,107,61,0.6)] hover:brightness-110',
+        variant === 'default' && 'bg-ink-700 text-ink-100 ring-1 ring-ink-600 hover:bg-ink-650',
+        variant === 'ghost' && 'text-ink-300 hover:bg-ink-700 hover:text-ink-100',
         className,
       )}
     >
-      {icon}
       {children}
     </button>
   );
 }
 
-/* ------------------------------------------------------- PanelHeader */
-
-export function PanelHead({
-  title,
-  code,
-  right,
-  accent = "amber",
-}: {
-  title: string;
-  code?: string;
-  right?: ReactNode;
-  accent?: "amber" | "teal" | "magenta" | "sky";
-}) {
-  const c = {
-    amber: "bg-amber",
-    teal: "bg-teal",
-    magenta: "bg-magenta",
-    sky: "bg-sky",
-  }[accent];
-  return (
-    <div className="flex h-8 shrink-0 items-center gap-2 border-b border-line bg-panel/80 px-2.5">
-      <span className={cn("h-3 w-[2px] rounded-full", c)} />
-      <h2 className="font-display text-[11px] font-semibold tracking-[0.16em] text-txt/90 uppercase">
-        {title}
-      </h2>
-      {code && <span className="font-mono text-[9px] text-faint">{code}</span>}
-      <div className="ml-auto flex items-center gap-1">{right}</div>
-    </div>
-  );
-}
-
-/* ----------------------------------------------------------- Section */
-
-export function Section({
-  label,
-  children,
-  defaultOpen = true,
-  right,
-}: {
-  label: string;
-  children: ReactNode;
-  defaultOpen?: boolean;
-  right?: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="border-b border-line/70">
-      <div className="flex items-center">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className="group flex h-7 flex-1 items-center gap-1.5 px-2.5 text-left"
-        >
-          <IconChevron
-            width={11}
-            height={11}
-            className={cn("text-faint transition-transform duration-200", open ? "rotate-90" : "")}
-          />
-          <span
-            className={cn(
-              "font-display text-[10px] font-medium tracking-[0.18em] uppercase transition-colors",
-              open ? "text-dim" : "text-faint group-hover:text-dim",
-            )}
-          >
-            {label}
-          </span>
-        </button>
-        <div className="pr-2">{right}</div>
-      </div>
-      <div
-        className={cn(
-          "grid transition-[grid-template-rows,opacity] duration-250 ease-out",
-          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
-        )}
-      >
-        <div className="overflow-hidden">
-          <div className="px-2.5 pt-0.5 pb-2.5">{children}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------- ProSlider */
-
-type SliderProps = {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  def?: number;
-  step?: number;
-  bipolar?: boolean;
-  digits?: number;
-  unit?: string;
-  accent?: string;
-  disabled?: boolean;
-  onChange: (v: number) => void;
-  onCommit?: () => void;
-};
-
-export function ProSlider({
-  label,
+export function Tabs<T extends string>({
   value,
-  min,
-  max,
-  def = 0,
-  step = 0.01,
-  bipolar,
-  digits = 2,
-  unit = "",
-  accent = "var(--color-amber)",
-  disabled,
   onChange,
-  onCommit,
-}: SliderProps) {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const [drag, setDrag] = useState(false);
-  const [hover, setHover] = useState(false);
-  const bp = bipolar ?? (min < 0 && max > 0);
-  const id = useId();
-
-  const bi = bp ? clamp(def, min, max) : min;
-  const zeroT = ((bi - min) / (max - min)) * 100;
-  const t = ((value - min) / (max - min)) * 100;
-  const left = Math.min(zeroT, t);
-  const width = Math.abs(t - zeroT);
-  const dirty = Math.abs(value - def) > step / 2;
-
-  const setFromClient = useCallback(
-    (clientX: number, fine: boolean) => {
-      const el = trackRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      const p = clamp((clientX - r.left) / Math.max(1, r.width), 0, 1);
-      let v = min + p * (max - min);
-      if (fine) v = value + (v - value) * 0.18;
-      v = Math.round(v / step) * step;
-      onChange(clamp(v, min, max));
-    },
-    [max, min, onChange, step, value],
-  );
-
-  useEffect(() => {
-    if (!drag) return;
-    const move = (e: PointerEvent) => setFromClient(e.clientX, e.shiftKey);
-    const up = () => {
-      setDrag(false);
-      onCommit?.();
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    return () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-  }, [drag, onCommit, setFromClient]);
-
-  const shown = value.toFixed(digits) + unit;
-
-  return (
-    <div
-      className={cn(
-        "group/sl relative flex h-[22px] items-center gap-2 rounded-[4px] pr-1 transition-colors",
-        hover && "bg-raise/70",
-        disabled && "pointer-events-none opacity-40",
-      )}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    >
-      <label
-        htmlFor={id}
-        className="w-[74px] shrink-0 cursor-default truncate text-[10.5px] tracking-wide text-dim group-hover/sl:text-txt/85"
-      >
-        {label}
-      </label>
-      <div
-        id={id}
-        ref={trackRef}
-        role="slider"
-        tabIndex={0}
-        aria-label={label}
-        aria-valuemin={min}
-        aria-valuemax={max}
-        aria-valuenow={value}
-        className="relative h-[18px] flex-1 cursor-ew-resize touch-none"
-        onPointerDown={(e) => {
-          (e.target as HTMLElement).focus?.();
-          setDrag(true);
-          setFromClient(e.clientX, e.shiftKey);
-        }}
-        onDoubleClick={() => {
-          onChange(def);
-          onCommit?.();
-        }}
-        onWheel={(e) => {
-          const d = Math.sign(e.deltaY) * -step * (e.shiftKey ? 1 : 4);
-          onChange(clamp(Math.round((value + d) / step) * step, min, max));
-        }}
-        onKeyDown={(e) => {
-          const mult = e.shiftKey ? 1 : 4;
-          if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
-            onChange(clamp(value - step * mult, min, max));
-            e.preventDefault();
-          } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
-            onChange(clamp(value + step * mult, min, max));
-            e.preventDefault();
-          } else if (e.key === "Home") {
-            onChange(min);
-            e.preventDefault();
-          } else if (e.key === "End") {
-            onChange(max);
-            e.preventDefault();
-          } else if (e.key === "Backspace") {
-            onChange(def);
-            e.preventDefault();
-          }
-        }}
-      >
-        {/* rail */}
-        <div className="absolute top-1/2 right-0 left-0 h-[3px] -translate-y-1/2 rounded-full bg-[#20252d]" />
-        {bp && (
-          <div
-            className="absolute top-1/2 h-[7px] w-px -translate-y-1/2 bg-line2"
-            style={{ left: `${zeroT}%` }}
-          />
-        )}
-        {/* fill */}
-        <div
-          className="absolute top-1/2 h-[3px] -translate-y-1/2 rounded-full transition-[background] duration-150"
-          style={{
-            left: `${left}%`,
-            width: `${width}%`,
-            background: dirty ? accent : "#39414d",
-            boxShadow: dirty && drag ? `0 0 10px ${accent}` : "none",
-          }}
-        />
-        {/* knob */}
-        <div
-          className={cn(
-            "absolute top-1/2 h-[13px] w-[6px] -translate-x-1/2 -translate-y-1/2 rounded-[2px] border transition-all duration-100",
-            drag ? "h-[16px] w-[7px]" : "",
-          )}
-          style={{
-            left: `${t}%`,
-            background: dirty ? "#f2f5f9" : "#8b95a3",
-            borderColor: "#0a0c0f",
-            boxShadow: drag ? `0 0 0 3px ${accent}22` : "0 1px 3px rgba(0,0,0,.6)",
-          }}
-        />
-      </div>
-      <div className="flex w-[52px] shrink-0 items-center justify-end gap-1">
-        {dirty && (
-          <button
-            type="button"
-            title="Reset"
-            onClick={() => {
-              onChange(def);
-              onCommit?.();
-            }}
-            className="text-faint opacity-0 transition-opacity group-hover/sl:opacity-100 hover:text-amber"
-          >
-            <IconReset width={11} height={11} />
-          </button>
-        )}
-        <span
-          className={cn(
-            "tabular font-mono text-[10px] leading-none",
-            dirty ? "text-txt" : "text-faint",
-          )}
-        >
-          {shown}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------- Tabs */
-
-export function SegTabs<T extends string>({
   items,
-  value,
-  onChange,
   className,
 }: {
-  items: { id: T; label: string; icon?: ReactNode }[];
   value: T;
   onChange: (v: T) => void;
+  items: { id: T; label: ReactNode; icon?: ReactNode }[];
   className?: string;
 }) {
-  const idx = Math.max(0, items.findIndex((i) => i.id === value));
   return (
-    <div className={cn("relative flex rounded-[6px] border border-line bg-base/70 p-[3px]", className)}>
-      <div
-        className="pointer-events-none absolute top-[3px] bottom-[3px] rounded-[4px] bg-raise2 shadow-[inset_0_1px_0_rgba(255,255,255,.06)] transition-all duration-300 ease-[cubic-bezier(.2,.9,.3,1)]"
-        style={{
-          left: `calc(3px + ${(idx / items.length) * 100}% - ${(idx / items.length) * 6}px)`,
-          width: `calc(${100 / items.length}% - ${6 / items.length}px)`,
-        }}
-      />
+    <div className={cn('flex items-center gap-0.5', className)}>
       {items.map((it) => (
         <button
           key={it.id}
           type="button"
           onClick={() => onChange(it.id)}
           className={cn(
-            "relative z-[1] flex-1 whitespace-nowrap px-2 py-1 text-[10px] font-medium tracking-[0.1em] uppercase transition-colors duration-200",
-            it.id === value ? "text-amber" : "text-faint hover:text-dim",
+            'flex items-center gap-1.5 whitespace-nowrap rounded px-2 py-1 text-[11px] font-medium transition',
+            value === it.id ? 'bg-ink-650 text-ink-100' : 'text-ink-400 hover:bg-ink-700 hover:text-ink-200',
           )}
         >
-          <span className="inline-flex items-center gap-1.5">
-            {it.icon}
-            {it.label}
-          </span>
+          {it.icon}
+          {it.label}
         </button>
       ))}
     </div>
   );
 }
 
-/* ------------------------------------------------------------- misc */
+export function Section({ title, children, right, note }: { title: string; children: ReactNode; right?: ReactNode; note?: string }) {
+  return (
+    <div className="mb-3">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h4 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-400">
+          {title}
+          {note && <span className="ml-1.5 normal-case tracking-normal text-ink-500">· {note}</span>}
+        </h4>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+export function Select({
+  value,
+  onChange,
+  options,
+  className,
+  title,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  className?: string;
+  title?: string;
+}) {
+  return (
+    <select
+      value={value}
+      title={title}
+      onChange={(e) => onChange(e.target.value)}
+      className={cn(
+        'h-7 cursor-pointer rounded bg-ink-900 px-2 text-[11px] text-ink-100 outline-none ring-1 ring-ink-650 hover:ring-ink-500 focus:ring-accent/60',
+        className,
+      )}
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 export function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] border border-line2 bg-raise px-1 font-mono text-[9.5px] text-dim shadow-[0_1px_0_#0a0c0f]">
+    <kbd className="inline-flex min-w-[20px] items-center justify-center rounded border border-ink-600 bg-ink-850 px-1.5 py-0.5 font-mono text-[10px] text-ink-200 shadow-[inset_0_-1px_0_rgba(255,255,255,0.05)]">
       {children}
     </kbd>
   );
 }
 
-export function Tag({
-  children,
-  tone = "dim",
-  className,
-}: {
-  children: ReactNode;
-  tone?: "dim" | "amber" | "teal" | "magenta" | "flame" | "lime";
-  className?: string;
-}) {
-  const tones = {
-    dim: "border-line2 text-faint",
-    amber: "border-amber/40 text-amber bg-amber/10",
-    teal: "border-teal/40 text-teal bg-teal/10",
-    magenta: "border-magenta/40 text-magenta bg-magenta/10",
-    flame: "border-flame/40 text-flame bg-flame/10",
-    lime: "border-lime/40 text-lime bg-lime/10",
-  }[tone];
+export function GithubMark({ size = 16, className }: { size?: number; className?: string }) {
   return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-[3px] border px-1.5 py-[1px] font-mono text-[9px] tracking-wider uppercase",
-        tones,
-        className,
-      )}
-    >
-      {children}
-    </span>
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2.17c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
+    </svg>
   );
 }
 
-export function Toggle({
-  on,
-  onChange,
-  label,
-  tone = "amber",
-}: {
-  on: boolean;
-  onChange: (v: boolean) => void;
-  label?: string;
-  tone?: "amber" | "teal";
-}) {
+export function Logo({ size = 22 }: { size?: number }) {
   return (
-    <button
-      type="button"
-      onClick={() => onChange(!on)}
-      className="group flex items-center gap-1.5"
-      title={label}
-    >
-      <span
-        className={cn(
-          "relative h-[13px] w-[24px] rounded-full border transition-colors duration-200",
-          on
-            ? tone === "amber"
-              ? "border-amber/60 bg-amber/25"
-              : "border-teal/60 bg-teal/25"
-            : "border-line2 bg-[#151a20]",
-        )}
-      >
-        <span
-          className={cn(
-            "absolute top-[1.5px] h-[8px] w-[8px] rounded-full transition-all duration-200",
-            on ? (tone === "amber" ? "left-[13px] bg-amber" : "left-[13px] bg-teal") : "left-[2px] bg-[#4b5563]",
-          )}
-        />
-      </span>
-      {label && (
-        <span className={cn("text-[10px] tracking-wide transition-colors", on ? "text-txt/80" : "text-faint")}>
-          {label}
-        </span>
-      )}
-    </button>
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="16" cy="12" r="7.5" fill="#ff6b3d" fillOpacity="0.92" />
+      <circle cx="11.2" cy="19.6" r="7.5" fill="#3dd6ff" fillOpacity="0.8" style={{ mixBlendMode: 'screen' }} />
+      <circle cx="20.8" cy="19.6" r="7.5" fill="#a3e635" fillOpacity="0.75" style={{ mixBlendMode: 'screen' }} />
+    </svg>
   );
 }

@@ -1,121 +1,141 @@
-# LUMEN Grade — professional color & photo editor (browser based)
+# 🎨 Chroma Studio: Professional Photo Color Grading in the Browser
 
-DaVinci Resolve অনুপ্রাণিত একটি **নোড-বেইজড কালার গ্রেডিং স্যুট**, যা সম্পূর্ণ ব্রাউজারে (WebGL2 + React) চলে।
-কোনো সার্ভার, ডেটাবেস বা ইনস্টলেশন লাগে না — শুধু স্ট্যাটিক হোস্টিং।
+A **DaVinci Resolve-inspired** photo editor built with **React + TypeScript + Tailwind CSS + WebGL2**.
+Every pixel is processed on your GPU in a 16-bit floating-point pipeline. Photos never leave your computer.
 
-![stack](https://img.shields.io/badge/React_19-61dafb) ![vite](https://img.shields.io/badge/Vite_7-646cff) ![tailwind](https://img.shields.io/badge/Tailwind_4-38bdf8) ![webgl2](https://img.shields.io/badge/WebGL2-F5A524)
+![Made with React](https://img.shields.io/badge/React-19-61dafb) ![WebGL2](https://img.shields.io/badge/WebGL-2.0-ff6b3d) ![License](https://img.shields.io/badge/license-MIT-green)
 
----
+## ✨ Features
 
-## ✨ ফিচার
-
-| অংশ | কী আছে |
+| Area | What you get |
 | --- | --- |
-| **Node pipeline** | ৫টি সিরিয়াল নোড — Primary · Wheels · Curves · Split Tone · FX। প্রতিটি নোড আলাদাভাবে bypass / reset করা যায় |
-| **Primary bars** | Exposure (EV), Contrast + Pivot, Highlights, Shadows, Whites, Blacks, Temperature, Tint, Vibrance, Saturation |
-| **Color wheels** | Lift / Gamma / Gain / Offset — ASC CDL স্টাইল, প্রতিটিতে master স্লাইডার |
-| **Custom curves** | Monotone cubic spline, Master/R/G/B চ্যানেল, পয়েন্ট add-drag-delete, পেছনে লাইভ luma histogram |
-| **Split toning** | Shadow + Highlight hue wheel ও amount |
-| **FX** | Sharpen (unsharp mask), Defocus, Chromatic aberration, Glow/Bloom + threshold, Vignette, Film grain, Grade mix |
-| **Scopes** | RGB Histogram, RGB Parade, Luma Waveform, Vectorscope (Cb/Cr গ্র্যাটিকিউল + skin tone line), clip warning |
-| **Viewer** | Zoom 6%–1200%, pan, fit, 1:1, thirds grid, safe areas, **A/B compare wipe**, hold-to-see-original |
-| **Look library** | ১০টি রেডি লুক — hover করলেই লাইভ প্রিভিউ, ক্লিক করলে tween সহ অ্যাপ্লাই |
-| **Timeline** | একাধিক ক্লিপ, প্রতিটির নিজস্ব গ্রেড, থাম্বনেইল ফিল্মস্ট্রিপ |
-| **Workflow** | Undo/Redo (৫০ স্টেপ), drag & drop ইমপোর্ট, প্রজেক্ট `.json` সেভ/লোড, PNG-JPEG-WebP এক্সপোর্ট (২৫%–২০০% স্কেল) |
-| **Shortcuts** | `\` compare · `Y` original · `1-5` নোড · `B` bypass · `R` reset node · `0` reset all · `F` fit · `Ctrl+E` export |
+| **Node graph** | Serial nodes like Resolve: add (Alt+S), enable/disable (Ctrl+D), delete, rename, key-output mix, per-node LUT |
+| **Color wheels** | Lift · Gamma · Gain · Offset with master jog wheels and YRGB readouts |
+| **Primaries** | Temperature, tint, exposure, contrast + pivot, mid-detail, color boost, shadows, highlights, whites, blacks, saturation, hue, fade |
+| **Curves** | Custom Y / R / G / B curves + Hue vs Hue, Hue vs Sat, Hue vs Lum |
+| **LUTs** | Import real 3D `.cube` LUTs; export your whole grade as a 33³ `.cube` for Resolve / Premiere |
+| **Looks** | 16 built-in looks (Teal & Orange, Film Print 2383, Bleach Bypass, Noir, Cyberpunk…) with live previews |
+| **Scopes** | RGB Parade, Waveform, Vectorscope (with skin-tone line), Histogram, all live |
+| **Sizing** | Crop with aspect presets (1:1, 4:5, 16:9, 2.39 Scope…), straighten, rotate, flip |
+| **Effects** | Sharpen, clarity, blur, vignette, film grain, split toning |
+| **Viewer** | Before/after wipe, bypass, clipping warnings, pixel probe, zoom & pan, cinema mode |
+| **Workflow** | Unlimited undo/redo, gallery stills, copy/paste grades between photos, save/load `.json` grades |
+| **Deliver** | Full-resolution JPEG / PNG / WebP export, resolution scaling, batch render to ZIP |
 
----
-
-## 🚀 লোকালে চালানো
+## 🚀 Run locally
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
-npm run build      # dist/ তৈরি হয়
-npm run preview    # বিল্ড প্রিভিউ
+npm run dev        # open http://localhost:5173
+npm run build      # production build → dist/index.html
 ```
 
 ---
 
-## 🐙 GitHub Pages-এ পাবলিশ (ধাপে ধাপে)
+## 🌍 Deploy to GitHub Pages (step by step)
 
-### ধাপ ১ — রিপোজিটরি তৈরি
-GitHub → **New repository** → নাম `lumen-grade` → **Public** → Create।
+> A copy of this guide is also inside the app: **Help → Deploy to GitHub** (or the **Deploy guide** button at the top).
 
-### ধাপ ২ — কোড পুশ
+### Step 1: Install the tools (one time)
+- [Node.js LTS](https://nodejs.org), [Git](https://git-scm.com/downloads), and a free [GitHub account](https://github.com/signup)
+- Check them in a terminal:
+  ```bash
+  node -v
+  npm -v
+  git --version
+  ```
+
+### Step 2: Open the project folder
+Download / extract the project, open the folder in VS Code, then open **Terminal → New Terminal**.
+
+### Step 3: Test locally
+```bash
+npm install
+npm run dev
+```
+Open http://localhost:5173. If it works, stop it with `Ctrl + C`.
+
+### Step 4: Create a repository on GitHub
+GitHub → **+** → **New repository** → name: `chroma-studio` → **Public** → do **not** add a README → **Create repository**.
+
+### Step 5: Tell Git who you are (first time only)
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
+### Step 6: Push the code
 ```bash
 git init
 git add .
-git commit -m "feat: LUMEN Grade photo editor"
+git commit -m "Initial commit: Chroma Studio photo editor"
 git branch -M main
-git remote add origin https://github.com/<username>/lumen-grade.git
+git remote add origin https://github.com/YOUR-USERNAME/chroma-studio.git
 git push -u origin main
 ```
+If Git asks for a password, use **Sign in with browser** or a **Personal Access Token**
+(GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) → `repo`).
 
-### ধাপ ৩ — Pages সেটিংস
-Repo → **Settings → Pages → Build and deployment → Source: `GitHub Actions`**
+### Step 7: Enable GitHub Pages
+Repository → **Settings** → **Pages** → *Build and deployment* → **Source: GitHub Actions**.
 
-### ধাপ ৪ — অটো ডিপ্লয়
-`.github/workflows/deploy.yml` আগে থেকেই যোগ করা আছে। এটি:
-1. Node 20 সেটআপ করে
-2. `npx vite build --base=/<repo-name>/` চালায় (সাব-পাথ ঠিক রাখতে base জরুরি)
-3. `dist/` ফোল্ডার GitHub Pages-এ আপলোড করে
+The workflow file [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) is already included.
+It installs, builds (`npm run build -- --base=./`) and publishes the site on every push to `main`.
 
-`main` ব্রাঞ্চে push করলেই **Actions** ট্যাবে বিল্ড চলবে, শেষে সাইট লাইভ:
+### Step 8: Wait for the green ✓
+Open the **Actions** tab. The workflow "Deploy to GitHub Pages" takes about 1–3 minutes.
+
+### Step 9: Visit your website 🎉
 ```
-https://<username>.github.io/lumen-grade/
+https://YOUR-USERNAME.github.io/chroma-studio/
 ```
 
-### বিকল্প — `gh-pages` প্যাকেজ দিয়ে
+### Step 10: Update later
 ```bash
-npm i -D gh-pages
-npx vite build --base=/lumen-grade/
-npx gh-pages -d dist
+git add .
+git commit -m "Update photo editor"
+git push
 ```
-তখন Settings → Pages → Source: **Deploy from a branch** → `gh-pages` / `/ (root)`।
+Every push redeploys automatically.
 
-### কাস্টম ডোমেইন
-```bash
-echo "grade.example.com" > public/CNAME
-```
-DNS-এ `CNAME → <username>.github.io` রেকর্ড যোগ করুন।
+### 🛠 Troubleshooting
+| Problem | Fix |
+| --- | --- |
+| 404 page | Settings → Pages → Source must be **GitHub Actions**; wait 2–5 minutes |
+| Blank page | Keep `--base=./` in the build step of the workflow |
+| Action failed | Open the run in the **Actions** tab to read the log; make sure `package-lock.json` is committed |
+| `git push` rejected | `git pull origin main --rebase` then `git push` |
+| No terminal | GitHub → **Add file → Upload files** (everything except `node_modules` and `dist`), then do Steps 7–9 |
 
 ---
 
-## 🗂 প্রজেক্ট স্ট্রাকচার
+### 🇧🇩 Bangla quick guide (সংক্ষেপে)
+1. Node.js, Git install korun, GitHub account khulun.
+2. Project folder e terminal open kore `npm install` → `npm run dev` diye test korun.
+3. GitHub e **New repository** banan (Public, README chara).
+4. Upore **Step 6** er command gulo diye code push korun.
+5. Repository → **Settings → Pages → Source: GitHub Actions** select korun.
+6. **Actions** tab e green ✓ asha porjonto wait korun (1-3 minute).
+7. Apnar website: `https://YOUR-USERNAME.github.io/chroma-studio/` 🎉
+8. Pore change korle: `git add .` → `git commit -m "update"` → `git push`. Automatic update hoye jabe!
 
+---
+
+## ⌨️ Keyboard shortcuts
+`Alt+S` add node · `Ctrl+D` toggle node · `Shift+D` bypass · `W` wipe · `H` clipping · `C` crop · `R` rotate ·
+`F` cinema · `↑/↓` clips · `1–5` palettes · `Ctrl+C / Ctrl+V` copy/paste grade · `Ctrl+Alt+G` grab still ·
+`Ctrl+E` export · `Ctrl+Z / Ctrl+Shift+Z` undo/redo
+
+## 🧱 Project structure
 ```
 src/
-├─ editor/
-│  ├─ engine.ts      # WebGL2 গ্রেডিং ইঞ্জিন (শেডার + LUT + এক্সপোর্ট)
-│  ├─ curves.ts      # monotone cubic spline → 256×4 LUT
-│  ├─ scopes.ts      # পিক্সেল অ্যানালাইসিস (hist/parade/wave/vectorscope)
-│  ├─ types.ts       # Adjustments মডেল, নোড, লুক প্রিসেট
-│  └─ project.ts     # মিডিয়া লোড, থাম্বনেইল, .json সেভ
-├─ components/
-│  ├─ Viewer.tsx     # ক্যানভাস, zoom/pan, compare wipe, overlay
-│  ├─ ToolDock.tsx   # ডান প্যানেলের সব টুল
-│  ├─ LeftDock.tsx   # মিডিয়া পুল + লুক লাইব্রেরি
-│  ├─ ColorWheel.tsx # ড্র্যাগেবল হুইল
-│  ├─ CurvesEditor.tsx
-│  ├─ Timeline.tsx   # নোড স্ট্রিপ + ফিল্মস্ট্রিপ
-│  ├─ Scopes.tsx
-│  ├─ Modals.tsx     # export / shortcuts / deploy guide
-│  └─ ui.tsx         # স্লাইডার, ট্যাব, বাটন, টগল
-└─ App.tsx           # স্টেট, হিস্ট্রি, শর্টকাট, লেআউট
+  gl/            WebGL2 renderer + GLSL shaders (node pass, finishing pass)
+  lib/           grading math, curves, transforms, scopes, LUT (.cube) parser, export
+  components/    Viewer, NodeEditor, Wheels, Curves, Scopes, Media / Color / Deliver pages
+  state/         editor context
+  App.tsx        app state, history, shortcuts, file import/export
+.github/workflows/deploy.yml   GitHub Pages deployment
 ```
 
-## ⚙️ গ্রেডিং পাইপলাইন (শেডার অর্ডার)
-
-```
-source → chroma shift → defocus → unsharp
-       → exposure → white balance
-       → lift / gamma / gain / offset (CDL)
-       → shadows·highlights·whites·blacks → contrast(pivot)
-       → curves LUT (master + RGB)
-       → split toning → vibrance → saturation
-       → bloom → vignette → grain → grade mix → output
-```
-
-## 📝 লাইসেন্স
-MIT — ইচ্ছেমতো ব্যবহার, ফর্ক ও মডিফাই করুন।
+## 📄 License
+MIT. Use it, change it, ship it.

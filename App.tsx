@@ -1,888 +1,784 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cn } from "@/utils/cn";
-import { GradeEngine } from "@/editor/engine";
-import { analyze, createScopeData, peakOf, type ScopeData } from "@/editor/scopes";
-import { download, mediaFromFile, mediaFromUrl, serialize, type MediaItem } from "@/editor/project";
-import {
-  NODES,
-  allNodesOn,
-  applyLook,
-  clamp,
-  defaultAdjustments,
-  isNodeDirty,
-  type Adjustments,
-  type Look,
-  type NodeKind,
-  type NodeState,
-} from "@/editor/types";
-import portraitUrl from "@/assets/samples/portrait.jpg";
-import landscapeUrl from "@/assets/samples/landscape.jpg";
-import streetUrl from "@/assets/samples/street.jpg";
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Check, UploadCloud } from 'lucide-react';
+import sampleMountain from './assets/samples/mountain.jpg';
+import sampleStreet from './assets/samples/street.jpg';
+import samplePortrait from './assets/samples/portrait.jpg';
+import type {
+  EditState,
+  ExportSettings,
+  Finishing,
+  Grade,
+  GradeNode,
+  LutData,
+  MediaItem,
+  ModalId,
+  Page,
+  PaletteTab,
+  ScopeType,
+  Still,
+  Transform,
+  ViewOptions,
+} from './types';
+import { EditorContext, type Editor } from './state/editor';
+import { useHistory, type HistoryState } from './hooks';
+import { cloneNodes, defaultEdit, defaultFinishing, defaultGrade, editHasChanges, makeNode, normalizeGrade, uid } from './lib/grade';
+import { aspectValue, cropForAspect, orientedSize } from './lib/transform';
+import { downloadBlob, downloadText, generateLutText, loadImage, makeThumb, outputName, renderFull, renderGradedThumb, zipFiles } from './lib/media';
+import { parseCube } from './lib/cube';
+import type { Look } from './lib/looks';
+import { PageNav, TopBar } from './components/TopBar';
+import { ColorPage } from './components/ColorPage';
+import { MediaPage } from './components/MediaPage';
+import { DeliverPage } from './components/DeliverPage';
+import { Modals } from './components/Modals';
 
-import { Viewer, computeLayout } from "@/components/Viewer";
-import { LeftDock } from "@/components/LeftDock";
-import { ToolDock } from "@/components/ToolDock";
-import { NodeStrip, Timeline } from "@/components/Timeline";
-import { Scopes } from "@/components/Scopes";
-import { DeployModal, ExportModal, ShortcutsModal } from "@/components/Modals";
-import { Btn, Kbd, Tag } from "@/components/ui";
-import {
-  IconAperture,
-  IconCompare,
-  IconDownload,
-  IconGithub,
-  IconKeyboard,
-  IconNodes,
-  IconRedo,
-  IconReset,
-  IconUndo,
-} from "@/components/Icons";
-
-const SAMPLES: [string, string][] = [
-  [portraitUrl, "Portrait — Window Light"],
-  [landscapeUrl, "Valley — Golden Hour"],
-  [streetUrl, "Neon Rain — Night Street"],
+const SAMPLES = [
+  { name: 'Alpine Sunrise.jpg', src: sampleMountain },
+  { name: 'Neon Rain.jpg', src: sampleStreet },
+  { name: 'Golden Hour Portrait.jpg', src: samplePortrait },
 ];
+const IMAGE_RE = /\.(jpe?g|png|webp|avif|gif|bmp)$/i;
+const PALETTE_KEYS: PaletteTab[] = ['wheels', 'curves', 'adjust', 'effects', 'transform'];
+const dataUrlBytes = (s: string) => (s.startsWith('data:') ? Math.round((s.length - s.indexOf(',') - 1) * 0.75) : undefined);
+const baseName = (n?: string) => (n ?? 'grade').replace(/\.[^.]+$/, '');
 
-type Hist = { id: string; adj: Adjustments; nodes: NodeState };
+interface NewMedia {
+  name: string;
+  src: string;
+  bytes?: number;
+  sample?: boolean;
+  objectUrl?: boolean;
+}
 
 export default function App() {
-  /* ---------------------------------------------------------- state */
-  const [engine, setEngine] = useState<GradeEngine | null>(null);
-  const [engineInfo, setEngineInfo] = useState("WebGL2");
-  const [booting, setBooting] = useState(true);
-  const [items, setItems] = useState<MediaItem[]>([]);
-  const [activeId, setActiveId] = useState("");
-  const [tab, setTab] = useState<NodeKind>("primary");
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [split, setSplit] = useState(-1);
-  const [original, setOriginal] = useState(false);
-  const [grid, setGrid] = useState(false);
-  const [safe, setSafe] = useState(false);
-  const [box, setBox] = useState({ w: 900, h: 560 });
-  const [preview, setPreview] = useState<Adjustments | null>(null);
-  const [lookId, setLookId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [ms, setMs] = useState(0);
-  const [tick, setTick] = useState(0);
-  const [texVersion, setTexVersion] = useState(0);
-  const [modal, setModal] = useState<null | "export" | "keys" | "deploy">(null);
-  const [toast, setToast] = useState<{ msg: string; tone: "amber" | "teal" | "flame" } | null>(null);
-  const [past, setPast] = useState<Hist[]>([]);
-  const [project, setProject] = useState("Untitled Grade — Reel 01");
-  const [future, setFuture] = useState<Hist[]>([]);
+  const [media, setMedia] = useState<MediaItem[]>([]);
+  const mediaRef = useRef<MediaItem[]>([]);
+  mediaRef.current = media;
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const currentIdRef = useRef<string | null>(null);
+  const [currentImage, setCurrentImage] = useState<HTMLImageElement | null>(null);
+  const images = useRef(new Map<string, HTMLImageElement>());
+  const objectUrls = useRef(new Map<string, string>());
+  const histories = useRef(new Map<string, HistoryState<EditState>>());
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const scopeRef = useRef<ScopeData>(createScopeData());
-  const requested = useRef<Set<string>>(new Set());
-  const pending = useRef<Hist | null>(null);
-  const lastScope = useRef(0);
-  const toastTimer = useRef<number | undefined>(undefined);
+  const history = useHistory<EditState>(defaultEdit);
+  const hs = history.get();
+  const edit = hs.present;
 
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
+  const [selectedNodeId, setSelectedNodeId] = useState(() => edit.nodes[0].id);
+  const [page, setPage] = useState<Page>('color');
+  const [palette, setPalette] = useState<PaletteTab>('wheels');
+  const [scopeType, setScopeType] = useState<ScopeType>('parade');
+  const [view, setViewState] = useState<ViewOptions>({ compare: 'off', split: 0.5, clipping: false, cropMode: false, cinema: false });
+  const [luts, setLuts] = useState<Record<string, LutData>>({});
+  const lutsRef = useRef(luts);
+  lutsRef.current = luts;
+  const [stills, setStills] = useState<Still[]>([]);
+  const stillCounter = useRef(0);
+  const [clipboard, setClipboard] = useState<{ nodes: GradeNode[]; finishing: Finishing } | null>(null);
+  const [modal, setModal] = useState<ModalId | null>(null);
+  const [toasts, setToasts] = useState<{ id: string; msg: string }[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const [exportSettings, setExportSettings] = useState<ExportSettings>({ format: 'image/jpeg', quality: 92, scale: 1, suffix: '_graded' });
+  const exportRef = useRef(exportSettings);
+  exportRef.current = exportSettings;
+  const fileInput = useRef<HTMLInputElement>(null);
+  const lutInput = useRef<HTMLInputElement>(null);
+  const gradeInput = useRef<HTMLInputElement>(null);
 
-  const active = useMemo(() => items.find((i) => i.id === activeId) ?? items[0], [items, activeId]);
-  const gradeAdj = preview ?? active?.adjustments ?? defaultAdjustments();
-  const gradeNodes = active?.nodes ?? allNodesOn();
-  const gradeKey = useMemo(() => JSON.stringify(gradeAdj), [gradeAdj]);
-  const nodeKey = useMemo(() => JSON.stringify(gradeNodes), [gradeNodes]);
+  const selectedIndex = Math.max(0, edit.nodes.findIndex((n) => n.id === selectedNodeId));
+  const selectedNode = edit.nodes[selectedIndex];
+  const selRef = useRef(selectedNode.id);
+  selRef.current = selectedNode.id;
+  const current = media.find((m) => m.id === currentId) ?? null;
 
-  const dpr = typeof window === "undefined" ? 1 : Math.min(2, window.devicePixelRatio || 1);
-  const layout = useMemo(
-    () => computeLayout(box.w, box.h, active?.w ?? 16, active?.h ?? 9, zoom, dpr),
-    [active?.h, active?.w, box.h, box.w, dpr, zoom],
+  /* ---------------- basics ---------------- */
+  const toast = useCallback((msg: string) => {
+    const id = uid();
+    setToasts((t) => [...t.slice(-3), { id, msg }]);
+    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2800);
+  }, []);
+  const setView = useCallback((patch: Partial<ViewOptions>) => setViewState((v) => ({ ...v, ...patch })), []);
+  const closeModal = useCallback(() => setModal(null), []);
+
+  const editFor = useCallback(
+    (id: string): EditState => (id === currentIdRef.current ? history.get().present : histories.current.get(id)?.present ?? defaultEdit()),
+    [history],
   );
 
-  const say = useCallback((msg: string, tone: "amber" | "teal" | "flame" = "teal") => {
-    setToast({ msg, tone });
-    window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 2400);
-  }, []);
+  /* ---------------- edit helpers ---------------- */
+  const updateEdit = useCallback((fn: (e: EditState) => EditState, transient = false) => history.update(fn, transient), [history]);
 
-  /* --------------------------------------------------------- engine */
-  useEffect(() => {
-    const cvs = canvasRef.current;
-    if (!cvs) return;
-    try {
-      const e = new GradeEngine(cvs);
-      setEngine(e);
-      setEngineInfo(e.info());
-      return () => e.dispose();
-    } catch (err) {
-      console.error(err);
-      setEngineInfo("WebGL2 unavailable");
-      setBooting(false);
-    }
-  }, []);
+  const updateGrade = useCallback(
+    (fn: (g: Grade) => Grade, transient = false) => {
+      history.update((e) => {
+        const id = e.nodes.some((n) => n.id === selRef.current) ? selRef.current : e.nodes[0].id;
+        return { ...e, nodes: e.nodes.map((n) => (n.id === id ? { ...n, grade: fn(n.grade) } : n)) };
+      }, transient);
+    },
+    [history],
+  );
 
-  const renderFrame = useCallback(() => {
-    if (!engine || !active || !engine.has(active.id)) return;
-    const t0 = performance.now();
-    engine.resize(layout.bufW, layout.bufH);
-    engine.draw(active.id, gradeAdj, gradeNodes, { split, original });
-    const dt = performance.now() - t0;
-    setMs((prev) => (Math.abs(prev - dt) > 0.4 ? dt : prev));
+  const setGrade = useCallback(
+    <K extends keyof Grade>(key: K, value: Grade[K], transient = false) => updateGrade((g) => ({ ...g, [key]: value }), transient),
+    [updateGrade],
+  );
 
-    const now = performance.now();
-    if (now - lastScope.current > 105) {
-      lastScope.current = now;
-      if (analyze(engine.canvas, scopeRef.current, 184)) setTick((t) => t + 1);
-    }
-    // texVersion re-triggers this callback as soon as a GPU texture lands
-  }, [active, engine, gradeAdj, gradeNodes, layout.bufH, layout.bufW, original, split, texVersion]);
+  const setFinishing = useCallback(
+    <K extends keyof Finishing>(key: K, value: Finishing[K], transient = false) =>
+      history.update((e) => ({ ...e, finishing: { ...e.finishing, [key]: value } }), transient),
+    [history],
+  );
 
-  useEffect(() => {
-    renderFrame();
-  }, [renderFrame, gradeKey, nodeKey]);
+  const setTransform = useCallback(
+    (patch: Partial<Transform>, transient = false) => history.update((e) => ({ ...e, transform: { ...e.transform, ...patch } }), transient),
+    [history],
+  );
 
-  /* -------------------------------------------------- media loading */
-  const registerTextures = useCallback(() => {
-    if (!engine) return;
-    for (const m of itemsRef.current) {
-      if (engine.has(m.id) || requested.current.has(m.id)) continue;
-      requested.current.add(m.id);
-      const img = new Image();
-      img.onload = () => {
-        engine.addImage(m.id, img, m.w, m.h);
-        setTexVersion((v) => v + 1);
-      };
-      img.onerror = () => requested.current.delete(m.id);
-      img.src = m.url;
-    }
-  }, [engine]);
+  const rotate = useCallback(
+    (dir: 1 | -1) => {
+      const item = mediaRef.current.find((m) => m.id === currentIdRef.current);
+      history.update((e) => {
+        const rot90 = (((e.transform.rot90 + dir) % 4) + 4) % 4;
+        const [W, H] = item ? orientedSize(item.width, item.height, rot90) : [1, 1];
+        return { ...e, transform: { ...e.transform, rot90, crop: cropForAspect(aspectValue(e.transform.aspect, W, H), W, H) } };
+      });
+    },
+    [history],
+  );
 
-  useEffect(() => {
-    registerTextures();
-  }, [registerTextures, items]);
+  /* ---------------- nodes ---------------- */
+  const addNode = useCallback(
+    (grade?: Partial<Grade>, label?: string) => {
+      const e = history.get().present;
+      const idx = e.nodes.findIndex((n) => n.id === selRef.current);
+      const node = makeNode(label ?? `Node ${e.nodes.length + 1}`, grade);
+      history.update((ed) => {
+        const nodes = [...ed.nodes];
+        nodes.splice(idx < 0 ? nodes.length : idx + 1, 0, node);
+        return { ...ed, nodes };
+      });
+      setSelectedNodeId(node.id);
+    },
+    [history],
+  );
 
-  useEffect(() => {
-    let dead = false;
-    (async () => {
-      const loaded: MediaItem[] = [];
-      for (const [url, name] of SAMPLES) {
-        try {
-          loaded.push(await mediaFromUrl(url, name, "sample"));
-        } catch {
-          /* ignore broken sample */
-        }
-      }
-      if (dead || !loaded.length) {
-        setBooting(false);
+  const deleteNode = useCallback(
+    (id?: string) => {
+      const target = id ?? selRef.current;
+      const e = history.get().present;
+      if (e.nodes.length <= 1) {
+        toast('A grade needs at least one node');
         return;
       }
-      setItems(loaded);
-      setActiveId(loaded[0].id);
-      setTimeout(() => !dead && setBooting(false), 520);
-    })();
-    return () => {
-      dead = true;
-    };
-  }, []);
-
-  /* ------------------------------------------------- container size */
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect();
-      setBox({ w: Math.max(60, r.width), h: Math.max(60, r.height) });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  /* -------------------------------------------------------- history */
-  const snapshot = useCallback((): Hist | null => {
-    const it = itemsRef.current.find((i) => i.id === activeId);
-    if (!it) return null;
-    return { id: it.id, adj: structuredClone(it.adjustments), nodes: { ...it.nodes } };
-  }, [activeId]);
-
-  const beginEdit = useCallback(() => {
-    if (!pending.current) pending.current = snapshot();
-  }, [snapshot]);
-
-  const commit = useCallback(() => {
-    if (!pending.current) return;
-    const h = pending.current;
-    pending.current = null;
-    setPast((p) => [...p.slice(-49), h]);
-    setFuture([]);
-  }, []);
-
-  const patch = useCallback(
-    (p: Partial<Adjustments>) => {
-      beginEdit();
-      setLookId(null);
-      setItems((list) =>
-        list.map((m) => (m.id === activeId ? { ...m, adjustments: { ...m.adjustments, ...p } } : m)),
-      );
+      const idx = e.nodes.findIndex((n) => n.id === target);
+      if (idx < 0) return;
+      history.update((ed) => ({ ...ed, nodes: ed.nodes.filter((n) => n.id !== target) }));
+      const next = e.nodes[idx - 1] ?? e.nodes[idx + 1];
+      if (next) setSelectedNodeId(next.id);
     },
-    [activeId, beginEdit],
+    [history, toast],
   );
 
-  const setNodes = useCallback(
-    (n: Partial<NodeState>) => {
-      beginEdit();
-      setItems((list) =>
-        list.map((m) => (m.id === activeId ? { ...m, nodes: { ...m.nodes, ...n } } : m)),
-      );
-      commit();
+  const toggleNode = useCallback(
+    (id?: string) => {
+      const target = id ?? selRef.current;
+      history.update((e) => ({ ...e, nodes: e.nodes.map((n) => (n.id === target ? { ...n, enabled: !n.enabled } : n)) }));
     },
-    [activeId, beginEdit, commit],
+    [history],
   );
-
-  const applyHist = useCallback((h: Hist) => {
-    setItems((list) => list.map((m) => (m.id === h.id ? { ...m, adjustments: h.adj, nodes: h.nodes } : m)));
-    setActiveId(h.id);
-  }, []);
-
-  const undo = useCallback(() => {
-    setPast((p) => {
-      if (!p.length) return p;
-      const cur = snapshot();
-      const h = p[p.length - 1];
-      if (cur) setFuture((f) => [...f, cur]);
-      applyHist(h);
-      return p.slice(0, -1);
-    });
-  }, [applyHist, snapshot]);
-
-  const redo = useCallback(() => {
-    setFuture((f) => {
-      if (!f.length) return f;
-      const cur = snapshot();
-      const h = f[f.length - 1];
-      if (cur) setPast((p) => [...p, cur]);
-      applyHist(h);
-      return f.slice(0, -1);
-    });
-  }, [applyHist, snapshot]);
 
   const resetNode = useCallback(
-    (kind: NodeKind) => {
-      beginEdit();
-      const d = defaultAdjustments();
-      const it = itemsRef.current.find((m) => m.id === activeId);
-      if (!it) return;
-      let adj = { ...it.adjustments };
-      if (kind === "primary")
-        adj = {
-          ...adj,
-          exposure: d.exposure,
-          contrast: d.contrast,
-          pivot: d.pivot,
-          highlights: 0,
-          shadows: 0,
-          whites: 0,
-          blacks: 0,
-          temperature: 0,
-          tint: 0,
-          vibrance: 0,
-          saturation: 1,
-        };
-      if (kind === "wheels") adj = { ...adj, lift: d.lift, gamma: d.gamma, gain: d.gain, offset: d.offset };
-      if (kind === "curves") adj = { ...adj, curves: d.curves };
-      if (kind === "split") adj = { ...adj, shadowAmt: 0, highAmt: 0 };
-      if (kind === "fx")
-        adj = {
-          ...adj,
-          sharpen: 0,
-          blur: 0,
-          bloom: 0,
-          bloomThreshold: d.bloomThreshold,
-          vignette: 0,
-          vignetteSoft: d.vignetteSoft,
-          grain: 0,
-          chroma: 0,
-          intensity: 1,
-        };
-      setItems((list) => list.map((m) => (m.id === activeId ? { ...m, adjustments: adj } : m)));
-      setLookId(null);
-      commit();
-      say(`${NODES.find((n) => n.id === kind)?.label} node reset`, "amber");
+    (id?: string) => {
+      const target = id ?? selRef.current;
+      history.update((e) => ({ ...e, nodes: e.nodes.map((n) => (n.id === target ? { ...n, grade: defaultGrade() } : n)) }));
     },
-    [activeId, beginEdit, commit, say],
+    [history],
+  );
+
+  const renameNode = useCallback(
+    (id: string, label: string, transient = false) =>
+      history.update((e) => ({ ...e, nodes: e.nodes.map((n) => (n.id === id ? { ...n, label } : n)) }), transient),
+    [history],
   );
 
   const resetAll = useCallback(() => {
-    beginEdit();
-    setItems((list) =>
-      list.map((m) =>
-        m.id === activeId ? { ...m, adjustments: defaultAdjustments(), nodes: allNodesOn() } : m,
-      ),
-    );
-    setLookId(null);
-    commit();
-    say("Grade cleared", "amber");
-  }, [activeId, beginEdit, commit, say]);
+    const fresh = defaultEdit();
+    history.update(() => fresh);
+    setSelectedNodeId(fresh.nodes[0].id);
+    toast('All grades and sizing reset');
+  }, [history, toast]);
 
-  /* --------------------------------------------------------- auto tone */
-  const autoTone = useCallback(() => {
-    if (!engine || !active || !engine.has(active.id)) return;
-    // measure the *source* pixels: render ungraded into the buffer, analyse, restore
-    engine.resize(layout.bufW, layout.bufH);
-    engine.draw(active.id, gradeAdj, gradeNodes, { split: -1, original: true });
-    const s = createScopeData();
-    if (!analyze(engine.canvas, s, 200)) {
-      renderFrame();
-      say("Auto tone needs pixel access", "flame");
+  /* ---------------- media ---------------- */
+  const selectMedia = useCallback(
+    (id: string) => {
+      const prev = currentIdRef.current;
+      if (prev === id) return;
+      if (prev) histories.current.set(prev, history.snapshot());
+      const h = histories.current.get(id) ?? { past: [], present: defaultEdit(), future: [] };
+      history.reset(h);
+      currentIdRef.current = id;
+      setCurrentId(id);
+      setCurrentImage(images.current.get(id) ?? null);
+      setSelectedNodeId(h.present.nodes[0].id);
+      setViewState((v) => ({ ...v, cropMode: false }));
+    },
+    [history],
+  );
+
+  const addMedia = useCallback(
+    async (entries: NewMedia[]) => {
+      const added: MediaItem[] = [];
+      for (const e of entries) {
+        try {
+          const img = await loadImage(e.src);
+          const id = uid();
+          images.current.set(id, img);
+          if (e.objectUrl) objectUrls.current.set(id, e.src);
+          added.push({ id, name: e.name, width: img.naturalWidth, height: img.naturalHeight, bytes: e.bytes, thumb: makeThumb(img, 320), sample: e.sample });
+        } catch {
+          toast(`Could not open ${e.name}`);
+          if (e.objectUrl) URL.revokeObjectURL(e.src);
+        }
+      }
+      if (added.length) setMedia((m) => [...m, ...added]);
+      return added;
+    },
+    [toast],
+  );
+
+  const loadSamples = useCallback(async () => {
+    const existing = new Set(mediaRef.current.filter((m) => m.sample).map((m) => m.name));
+    const todo = SAMPLES.filter((s) => !existing.has(s.name));
+    if (!todo.length) {
+      toast('Sample images are already loaded');
       return;
     }
-    const [R, G, B] = s.avg.map((v) => v / 255);
-    const mean = Math.max(0.001, R * 0.2126 + G * 0.7152 + B * 0.0722);
+    const added = await addMedia(todo.map((s) => ({ ...s, sample: true, bytes: dataUrlBytes(s.src) })));
+    if (added.length && !currentIdRef.current) selectMedia(added[0].id);
+  }, [addMedia, selectMedia, toast]);
 
-    // percentile spread of the luma histogram
-    const total = s.samples;
-    let acc = 0;
-    let p1 = 0;
-    let p99 = 1;
-    for (let i = 0; i < 256; i++) {
-      acc += s.luma[i];
-      if (p1 === 0 && acc > total * 0.01) p1 = i / 255;
-      if (acc > total * 0.99) {
-        p99 = i / 255;
-        break;
+  const removeMedia = useCallback(
+    (id: string) => {
+      const list = mediaRef.current;
+      const idx = list.findIndex((m) => m.id === id);
+      if (idx < 0) return;
+      const next = list.filter((m) => m.id !== id);
+      setMedia(next);
+      images.current.delete(id);
+      histories.current.delete(id);
+      const url = objectUrls.current.get(id);
+      if (url) {
+        URL.revokeObjectURL(url);
+        objectUrls.current.delete(id);
       }
-    }
-    const spread = Math.max(0.08, p99 - p1);
-
-    let hi = 0;
-    let lo = 0;
-    for (let i = 250; i < 256; i++) hi += s.luma[i];
-    for (let i = 0; i < 6; i++) lo += s.luma[i];
-
-    const r2 = (v: number, lim: number) => Math.round(clamp(v, -lim, lim) * 100) / 100;
-    const next: Partial<Adjustments> = {
-      exposure: r2(Math.log2(0.44 / mean) * 0.85, 1.6),
-      contrast: r2((0.74 - spread) * 0.95, 0.45),
-      blacks: r2(Math.max(0, p1 - 0.012) * 1.6, 0.35),
-      whites: r2(Math.max(0, 0.985 - p99) * 1.1, 0.3),
-      highlights: hi > total * 0.004 ? -0.18 : r2((0.9 - p99) * 0.25, 0.25),
-      shadows: lo > total * 0.006 ? 0.16 : r2((0.08 - p1) * 0.5, 0.22),
-      temperature: r2(((R - B) / Math.max(0.05, (R + B) / 2)) * -0.42, 0.55),
-      tint: r2(((G - (R + B) / 2) / Math.max(0.05, mean)) * -0.34, 0.35),
-    };
-    beginEdit();
-    setLookId(null);
-    setItems((list) =>
-      list.map((m) => (m.id === activeId ? { ...m, adjustments: { ...m.adjustments, ...next } } : m)),
-    );
-    commit();
-    renderFrame();
-    say(`Auto tone · EV ${next.exposure} · WB ${next.temperature}`, "teal");
-  }, [active, activeId, beginEdit, commit, engine, gradeAdj, gradeNodes, layout.bufH, layout.bufW, renderFrame, say]);
-
-  /* ------------------------------------------------------------ looks */
-  const tweenLook = useRef<number | undefined>(undefined);
-  const onApplyLook = useCallback(
-    (look: Look) => {
-      window.clearTimeout(tweenLook.current);
-      const it = itemsRef.current.find((m) => m.id === activeId);
-      if (!it) return;
-      beginEdit();
-      const target = applyLook(look);
-      const from = it.adjustments;
-      const t0 = performance.now();
-      const dur = 420;
-      const step = () => {
-        const k = clamp((performance.now() - t0) / dur, 0, 1);
-        const e = 1 - Math.pow(1 - k, 3);
-        const mixed = mixAdjustments(from, target, e);
-        setItems((list) => list.map((m) => (m.id === activeId ? { ...m, adjustments: mixed } : m)));
-        if (k < 1) tweenLook.current = window.setTimeout(step, 16);
-        else commit();
-      };
-      step();
-      setLookId(look.id);
-      setPreview(null);
-      say(`Look applied · ${look.name}`, "teal");
+      if (currentIdRef.current === id) {
+        currentIdRef.current = null;
+        const n = next[idx] ?? next[idx - 1];
+        if (n) selectMedia(n.id);
+        else {
+          const fresh = defaultEdit();
+          history.reset({ past: [], present: fresh, future: [] });
+          setCurrentId(null);
+          setCurrentImage(null);
+          setSelectedNodeId(fresh.nodes[0].id);
+        }
+      }
     },
-    [activeId, beginEdit, commit, say],
+    [history, selectMedia],
   );
 
-  const onPreviewLook = useCallback(
-    (look: Look | null) => {
-      if (!look) {
-        setPreview(null);
+  /* ---------------- LUTs & grade files ---------------- */
+  const importLuts = useCallback(
+    async (files: File[]) => {
+      for (const f of files) {
+        try {
+          const lut = parseCube(await f.text(), f.name.replace(/\.cube$/i, ''));
+          setLuts((l) => ({ ...l, [lut.id]: lut }));
+          updateGrade((g) => ({ ...g, lutId: lut.id, lutAmount: 100 }));
+          toast(`LUT loaded: ${lut.name} (${lut.size}³) → node ${selectedIndex + 1}`);
+        } catch (err) {
+          toast(`LUT error: ${(err as Error).message}`);
+        }
+      }
+    },
+    [toast, updateGrade, selectedIndex],
+  );
+
+  const removeLut = useCallback(
+    (id: string) => {
+      setLuts((l) => {
+        const n = { ...l };
+        delete n[id];
+        return n;
+      });
+      history.update((e) => ({ ...e, nodes: e.nodes.map((n) => (n.grade.lutId === id ? { ...n, grade: { ...n.grade, lutId: null } } : n)) }));
+    },
+    [history],
+  );
+
+  const loadGradeFile = useCallback(
+    async (file: File) => {
+      try {
+        const data = JSON.parse(await file.text());
+        if (!Array.isArray(data?.nodes) || !data.nodes.length) throw new Error('no nodes found');
+        const nodes: GradeNode[] = data.nodes.map((n: Partial<GradeNode>, i: number) => ({
+          id: uid(),
+          label: typeof n.label === 'string' ? n.label : `Node ${i + 1}`,
+          enabled: n.enabled !== false,
+          grade: normalizeGrade(n.grade ?? {}),
+        }));
+        const finishing: Finishing = { ...defaultFinishing(), ...(data.finishing ?? {}) };
+        history.update((e) => ({ ...e, nodes, finishing }));
+        setSelectedNodeId(nodes[0].id);
+        toast(`Grade loaded: ${file.name}`);
+      } catch (err) {
+        toast(`Invalid grade file (${(err as Error).message})`);
+      }
+    },
+    [history, toast],
+  );
+
+  const importFiles = useCallback(
+    async (list: FileList | File[]) => {
+      const files = Array.from(list);
+      const imgs = files.filter((f) => f.type.startsWith('image/') || IMAGE_RE.test(f.name));
+      const cubes = files.filter((f) => /\.cube$/i.test(f.name));
+      const grades = files.filter((f) => /\.json$/i.test(f.name));
+      if (!imgs.length && !cubes.length && !grades.length) {
+        toast('Unsupported file. Use images, .cube LUTs or .json grades');
         return;
       }
-      setPreview(applyLook(look));
-    },
-    [],
-  );
-
-  /* ------------------------------------------------------------- io */
-  const onFiles = useCallback(
-    async (files: FileList | File[]) => {
-      const arr = Array.from(files);
-      for (const f of arr) {
-        if (f.type === "application/json" || f.name.endsWith(".json")) {
-          try {
-            const proj = JSON.parse(await f.text());
-            if (proj?.app === "lumen-grade") {
-              beginEdit();
-              setItems((list) =>
-                list.map((m, i) =>
-                  proj.clips?.[i] ? { ...m, adjustments: proj.clips[i].adjustments, nodes: proj.clips[i].nodes } : m,
-                ),
-              );
-              commit();
-              say(`Project loaded · ${proj.clips?.length ?? 0} clips`, "teal");
-            }
-          } catch {
-            say("Project file could not be read", "flame");
-          }
-          continue;
-        }
-        if (!f.type.startsWith("image/")) continue;
-        try {
-          const m = await mediaFromFile(f);
-          setItems((list) => [...list, m]);
-          setActiveId(m.id);
-          say(`Imported · ${m.name}`, "teal");
-        } catch {
-          say(`Could not decode ${f.name}`, "flame");
+      if (imgs.length) {
+        const added = await addMedia(imgs.map((f) => ({ name: f.name || 'pasted-image.png', src: URL.createObjectURL(f), bytes: f.size, objectUrl: true })));
+        if (added.length) {
+          selectMedia(added[0].id);
+          toast(`Imported ${added.length} image${added.length > 1 ? 's' : ''}`);
         }
       }
+      if (cubes.length) await importLuts(cubes);
+      if (grades.length) await loadGradeFile(grades[0]);
     },
-    [beginEdit, commit, say],
+    [addMedia, selectMedia, importLuts, loadGradeFile, toast],
   );
 
-  const removeItem = useCallback(
-    (id: string) => {
-      engine?.removeImage(id);
-      requested.current.delete(id);
-      setItems((list) => {
-        const next = list.filter((m) => m.id !== id);
-        if (id === activeId && next.length) setActiveId(next[Math.max(0, next.length - 1)].id);
-        return next;
-      });
-      say("Clip removed", "amber");
+  const saveGrade = useCallback(() => {
+    const e = history.get().present;
+    const item = mediaRef.current.find((m) => m.id === currentIdRef.current);
+    const data = {
+      app: 'chroma-studio',
+      version: 1,
+      nodes: e.nodes.map((n) => ({ label: n.label, enabled: n.enabled, grade: n.grade })),
+      finishing: e.finishing,
+    };
+    downloadText(JSON.stringify(data, null, 2), `${baseName(item?.name)}.grade.json`, 'application/json');
+    toast('Grade preset saved (.json)');
+  }, [history, toast]);
+
+  const exportLut = useCallback(() => {
+    try {
+      const e = history.get().present;
+      const item = mediaRef.current.find((m) => m.id === currentIdRef.current);
+      const base = baseName(item?.name);
+      downloadText(generateLutText(e.nodes, lutsRef.current, `${base} grade`, 33), `${base}_grade.cube`);
+      toast('LUT exported (33³ .cube)');
+    } catch (err) {
+      toast(`LUT export failed: ${(err as Error).message}`);
+    }
+  }, [history, toast]);
+
+  /* ---------------- looks, stills, clipboard ---------------- */
+  const applyLook = useCallback(
+    (look: Look, asNew = false) => {
+      if (asNew) addNode(look.grade, look.name);
+      else {
+        history.update((e) => ({
+          ...e,
+          nodes: e.nodes.map((n) => (n.id === selRef.current ? { ...n, label: look.name, grade: normalizeGrade(structuredClone(look.grade)) } : n)),
+        }));
+      }
+      toast(`${look.name} applied${asNew ? ' as a new node' : ''}`);
     },
-    [activeId, engine, say],
+    [addNode, history, toast],
   );
 
-  const doExport = useCallback(
-    (o: { format: string; quality: number; scale: number; filename: string }) => {
-      if (!engine || !active) return;
-      setBusy(true);
-      window.setTimeout(() => {
+  const grabStill = useCallback(() => {
+    const id = currentIdRef.current;
+    const img = id ? images.current.get(id) : undefined;
+    if (!id || !img) return;
+    const e = history.get().present;
+    const thumb = renderGradedThumb(img, id, e, lutsRef.current, 320) ?? '';
+    stillCounter.current += 1;
+    const n = stillCounter.current;
+    setStills((s) => [{ id: uid(), name: `Still ${n}`, thumb, nodes: structuredClone(e.nodes), finishing: { ...e.finishing }, createdAt: Date.now() }, ...s]);
+    toast(`Still ${n} grabbed to Gallery`);
+  }, [history, toast]);
+
+  const applyStill = useCallback(
+    (sid: string) => {
+      const st = stills.find((s) => s.id === sid);
+      if (!st) return;
+      const nodes = cloneNodes(st.nodes);
+      history.update((e) => ({ ...e, nodes, finishing: { ...st.finishing } }));
+      setSelectedNodeId(nodes[0].id);
+      toast(`Applied ${st.name}`);
+    },
+    [stills, history, toast],
+  );
+
+  const deleteStill = useCallback((sid: string) => setStills((s) => s.filter((x) => x.id !== sid)), []);
+
+  const copyGrade = useCallback(() => {
+    const e = history.get().present;
+    setClipboard({ nodes: structuredClone(e.nodes), finishing: { ...e.finishing } });
+    toast(`Grade copied (${e.nodes.length} node${e.nodes.length > 1 ? 's' : ''})`);
+  }, [history, toast]);
+
+  const pasteGrade = useCallback(() => {
+    if (!clipboard) return;
+    const nodes = cloneNodes(clipboard.nodes);
+    history.update((e) => ({ ...e, nodes, finishing: { ...clipboard.finishing } }));
+    setSelectedNodeId(nodes[0].id);
+    toast('Grade pasted');
+  }, [clipboard, history, toast]);
+
+  /* ---------------- export ---------------- */
+  const exportItems = useCallback(
+    async (ids: string[], onProgress?: (done: number, total: number) => void) => {
+      const s = exportRef.current;
+      const results: { name: string; blob: Blob }[] = [];
+      let done = 0;
+      for (const id of ids) {
+        const item = mediaRef.current.find((m) => m.id === id);
+        const img = images.current.get(id);
+        if (!item || !img) continue;
         try {
-          const c = engine.exportCanvas(active.id, active.adjustments, active.nodes, o.scale);
-          if (!c) throw new Error("render failed");
-          c.toBlob(
-            (blob) => {
-              if (blob) {
-                download(o.filename, blob, o.format);
-                say(`Rendered ${c.width}×${c.height} · ${o.filename}`, "teal");
-              }
-              setBusy(false);
-              setModal(null);
-              renderFrame();
-            },
-            o.format,
-            o.quality,
-          );
-        } catch (e) {
-          console.error(e);
-          setBusy(false);
-          say("Export failed", "flame");
+          await new Promise((r) => setTimeout(r, 30));
+          const blob = await renderFull(img, editFor(id), lutsRef.current, s);
+          results.push({ name: outputName(item.name, s), blob });
+        } catch (err) {
+          toast(`Export failed for ${item.name}: ${(err as Error).message}`);
         }
-      }, 40);
+        done++;
+        onProgress?.(done, ids.length);
+      }
+      if (results.length === 1) {
+        downloadBlob(results[0].blob, results[0].name);
+        toast(`Exported ${results[0].name}`);
+      } else if (results.length > 1) {
+        downloadBlob(await zipFiles(results), `chroma-studio-export-${new Date().toISOString().slice(0, 10)}.zip`);
+        toast(`Exported ${results.length} images as ZIP`);
+      }
     },
-    [active, engine, renderFrame, say],
+    [editFor, toast],
   );
 
-  /* -------------------------------------------------------- shortcuts */
+  /* ---------------- effects ---------------- */
+  // boot: load the sample images once
+  const booted = useRef(false);
+  useEffect(() => {
+    if (booted.current) return;
+    booted.current = true;
+    (async () => {
+      const added = await addMedia(SAMPLES.map((s) => ({ ...s, sample: true, bytes: dataUrlBytes(s.src) })));
+      if (added.length && !currentIdRef.current) selectMedia(added[0].id);
+    })();
+  }, [addMedia, selectMedia]);
+
+  // keep graded thumbnails in the clip strip up to date
+  useEffect(() => {
+    if (!currentImage || !currentId) return;
+    const id = currentId;
+    const t = window.setTimeout(() => {
+      const url = editHasChanges(edit) ? renderGradedThumb(currentImage, id, edit, luts, 320) ?? undefined : undefined;
+      setMedia((m) => m.map((it) => (it.id === id && it.graded !== url ? { ...it, graded: url } : it)));
+    }, 450);
+    return () => window.clearTimeout(t);
+  }, [edit, luts, currentImage, currentId]);
+
+  // keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (modal) return;
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key.toLowerCase() === "z") {
+      const k = e.key.toLowerCase();
+      if (mod && k === 'z') {
         e.preventDefault();
-        e.shiftKey ? redo() : undo();
+        if (e.shiftKey) history.redo();
+        else history.undo();
         return;
       }
-      if (mod && e.key.toLowerCase() === "e") {
+      if (mod && k === 'y') {
         e.preventDefault();
-        setModal("export");
+        history.redo();
         return;
       }
-      if (mod && e.key.toLowerCase() === "o") {
+      if (mod && e.altKey && e.code === 'KeyG') {
         e.preventDefault();
-        fileRef.current?.click();
+        grabStill();
         return;
       }
-      if (mod) return;
-      switch (e.key) {
-        case "\\":
-          setSplit((s) => (s >= 0 ? -1 : 0.5));
+      if (e.altKey && !mod && e.code === 'KeyS') {
+        e.preventDefault();
+        addNode();
+        return;
+      }
+      if (mod && k === 'd') {
+        e.preventDefault();
+        toggleNode();
+        return;
+      }
+      if (mod && k === 'o') {
+        e.preventDefault();
+        fileInput.current?.click();
+        return;
+      }
+      if (mod && k === 'e') {
+        e.preventDefault();
+        if (currentIdRef.current) exportItems([currentIdRef.current]);
+        return;
+      }
+      if (mod && k === 'c') {
+        if (window.getSelection()?.toString()) return;
+        e.preventDefault();
+        copyGrade();
+        return;
+      }
+      if (mod || e.altKey) return;
+      if (e.shiftKey && k === 'd') {
+        setView({ compare: view.compare === 'bypass' ? 'off' : 'bypass' });
+        return;
+      }
+      switch (k) {
+        case 'delete':
+        case 'backspace':
+          if (page === 'color') {
+            e.preventDefault();
+            deleteNode();
+          }
           break;
-        case "y":
-        case "Y":
-          setOriginal((o) => !o);
+        case 'w':
+          setView({ compare: view.compare === 'split' ? 'off' : 'split' });
           break;
-        case "f":
-        case "F":
-          setZoom(1);
-          setPan({ x: 0, y: 0 });
+        case 'h':
+          setView({ clipping: !view.clipping });
           break;
-        case "g":
-        case "G":
-          setGrid((v) => !v);
+        case 'c':
+          setView({ cropMode: !view.cropMode });
+          if (page !== 'color') setPage('color');
           break;
-        case "s":
-        case "S":
-          setSafe((v) => !v);
+        case 'r':
+          rotate(e.shiftKey ? -1 : 1);
           break;
-        case "b":
-        case "B":
-          setNodes({ [tab]: !gradeNodes[tab] } as Partial<NodeState>);
+        case 'f':
+          setView({ cinema: !view.cinema });
           break;
-        case "r":
-        case "R":
-          resetNode(tab);
+        case 'enter':
+          if (view.cropMode) {
+            history.commit();
+            setView({ cropMode: false });
+          }
           break;
-        case "0":
-          resetAll();
+        case 'escape':
+          if (view.cinema || view.cropMode) setView({ cinema: false, cropMode: false });
           break;
-        case "+":
-        case "=":
-          setZoom((z) => clamp(z * 1.25, 0.06, 12));
+        case 'arrowup':
+        case 'arrowdown': {
+          const list = mediaRef.current;
+          const i = list.findIndex((m) => m.id === currentIdRef.current);
+          const n = list[i + (k === 'arrowup' ? -1 : 1)];
+          if (n) {
+            e.preventDefault();
+            selectMedia(n.id);
+          }
           break;
-        case "-":
-        case "_":
-          setZoom((z) => clamp(z / 1.25, 0.06, 12));
+        }
+        case '?':
+          setModal('shortcuts');
           break;
-        case "?":
-          setModal("keys");
-          break;
-        case "1":
-        case "2":
-        case "3":
-        case "4":
-        case "5":
-          setTab(NODES[Number(e.key) - 1].id);
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+          setPalette(PALETTE_KEYS[Number(k) - 1]);
+          if (page !== 'color') setPage('color');
           break;
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [gradeNodes, redo, resetAll, resetNode, setNodes, tab, undo]);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
-  const selectItem = useCallback((id: string) => {
-    setActiveId(id);
-    setPreview(null);
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-  }, []);
+  // paste images / grades, drag & drop files anywhere
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      const files = Array.from(e.clipboardData?.files ?? []);
+      if (files.length) {
+        e.preventDefault();
+        importFiles(files);
+        return;
+      }
+      pasteGrade();
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('Files')) {
+        e.preventDefault();
+        setDragOver(true);
+      }
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!e.relatedTarget) setDragOver(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      if (e.dataTransfer?.files.length) importFiles(e.dataTransfer.files);
+    };
+    window.addEventListener('paste', onPaste);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('paste', onPaste);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [importFiles, pasteGrade]);
 
-  /* ------------------------------------------------------------- UI */
-  const lumaPeak = peakOf(scopeRef.current.luma);
+  /* ---------------- context ---------------- */
+  const editor: Editor = {
+    media,
+    currentId,
+    current,
+    currentImage,
+    selectMedia,
+    removeMedia,
+    openImport: () => fileInput.current?.click(),
+    openLutImport: () => lutInput.current?.click(),
+    openGradeImport: () => gradeInput.current?.click(),
+    loadSamples,
+    editFor,
+    edit,
+    canUndo: hs.past.length > 0,
+    canRedo: hs.future.length > 0,
+    undo: history.undo,
+    redo: history.redo,
+    commit: history.commit,
+    updateEdit,
+    selectedNode,
+    selectedIndex,
+    selectNode: setSelectedNodeId,
+    updateGrade,
+    setGrade,
+    setFinishing,
+    setTransform,
+    rotate,
+    addNode,
+    deleteNode,
+    toggleNode,
+    resetNode,
+    renameNode,
+    resetAll,
+    view,
+    setView,
+    page,
+    setPage,
+    palette,
+    setPalette,
+    scopeType,
+    setScopeType,
+    luts,
+    removeLut,
+    applyLook,
+    exportLut,
+    stills,
+    grabStill,
+    applyStill,
+    deleteStill,
+    hasClipboard: !!clipboard,
+    copyGrade,
+    pasteGrade,
+    saveGrade,
+    exportSettings,
+    setExportSettings,
+    exportItems,
+    toast,
+    openModal: setModal,
+  };
 
   return (
-    <div className="app-bg relative flex h-screen w-screen flex-col overflow-hidden font-sans text-txt">
-      <div className="grid-fade pointer-events-none absolute inset-x-0 top-0 h-[420px]" />
-
-      {/* ============================ header ============================ */}
-      <header className="relative z-20 flex h-[52px] shrink-0 items-center gap-3 border-b border-line bg-panel/70 px-3 backdrop-blur-md">
-        <div className="flex items-center gap-2.5">
-          <div className="relative flex h-8 w-8 items-center justify-center rounded-[7px] border border-amber/35 bg-[#15120c]">
-            <IconAperture width={17} height={17} className="text-amber" />
-            <span className="spin-slow absolute inset-[-3px] rounded-[9px] border border-dashed border-amber/20" />
-          </div>
-          <div className="leading-none">
-            <h1 className="font-display text-[15px] font-bold tracking-[0.2em] text-txt uppercase">
-              Lumen<span className="text-amber">Grade</span>
-            </h1>
-            <p className="mt-[3px] font-mono text-[8.5px] tracking-[0.22em] text-faint uppercase">
-              node color suite · v1.0
-            </p>
-          </div>
-        </div>
-
-        <div className="mx-2 h-7 w-px bg-line" />
-
-        <div className="group hidden min-w-0 items-center gap-2 rounded-[6px] border border-transparent px-2 py-1 transition-colors hover:border-line focus-within:border-amber/45 focus-within:bg-base/60 md:flex">
-          <IconNodes width={13} height={13} className="shrink-0 text-faint" />
-          <input
-            value={project}
-            onChange={(e) => setProject(e.target.value)}
-            spellCheck={false}
-            className="w-[190px] truncate bg-transparent text-[11.5px] text-dim caret-amber outline-none transition-colors focus:text-txt"
-            title="Project name"
-          />
-          <Tag tone="dim">autosave</Tag>
-        </div>
-
-        <div className="ml-auto flex items-center gap-1">
-          <Btn size="sm" title="Undo (Ctrl+Z)" onClick={undo} disabled={!past.length} icon={<IconUndo width={13} height={13} />} />
-          <Btn size="sm" title="Redo (Ctrl+Shift+Z)" onClick={redo} disabled={!future.length} icon={<IconRedo width={13} height={13} />} />
-          <span className="mx-1 h-5 w-px bg-line" />
-          <Btn
-            size="sm"
-            title="Compare wipe (\)"
-            active={split >= 0}
-            onClick={() => setSplit((s) => (s >= 0 ? -1 : 0.5))}
-            icon={<IconCompare width={13} height={13} />}
-          >
-            <span className="hidden xl:inline">Compare</span>
-          </Btn>
-          <Btn size="sm" title="Reset entire grade (0)" onClick={resetAll} icon={<IconReset width={13} height={13} />}>
-            <span className="hidden xl:inline">Reset</span>
-          </Btn>
-          <span className="mx-1 h-5 w-px bg-line" />
-          <Btn size="sm" title="Keyboard shortcuts (?)" onClick={() => setModal("keys")} icon={<IconKeyboard width={13} height={13} />} />
-          <Btn
-            size="sm"
-            variant="outline"
-            title="Deploy to GitHub Pages"
-            onClick={() => setModal("deploy")}
-            icon={<IconGithub width={13} height={13} />}
-          >
-            Deploy
-          </Btn>
-          <Btn size="md" variant="solid" title="Export (Ctrl+E)" onClick={() => setModal("export")} icon={<IconDownload width={14} height={14} />}>
-            Export
-          </Btn>
-        </div>
-      </header>
-
-      {/* ============================ body ============================ */}
-      <div className="relative z-10 flex min-h-0 flex-1">
-        <LeftDock
-          items={items}
-          activeId={activeId}
-          onSelect={selectItem}
-          onRemove={removeItem}
-          onFiles={onFiles}
-          onOpenPicker={() => fileRef.current?.click()}
-          onApplyLook={onApplyLook}
-          onPreviewLook={onPreviewLook}
-          activeLookId={lookId}
-        />
-
-        <main className="relative flex min-w-0 flex-1 flex-col">
-          <Viewer
-            canvasRef={canvasRef}
-            containerRef={containerRef}
-            imgW={active?.w ?? 16}
-            imgH={active?.h ?? 9}
-            name={active?.name ?? "No media"}
-            empty={!active}
-            layout={layout}
-            zoom={zoom}
-            pan={pan}
-            split={split}
-            original={original}
-            showGrid={grid}
-            showSafe={safe}
-            dirty={preview ? true : NODES.some((n) => active && isNodeDirty(active.adjustments, n.id))}
-            onZoom={(z) => setZoom(z)}
-            onPan={setPan}
-            onSplit={setSplit}
-            onOriginal={setOriginal}
-            onGrid={() => setGrid((v) => !v)}
-            onSafe={() => setSafe((v) => !v)}
-            onFit={() => {
-              setZoom(1);
-              setPan({ x: 0, y: 0 });
-            }}
-            onFiles={onFiles}
-            onOpenPicker={() => fileRef.current?.click()}
-          />
+    <EditorContext.Provider value={editor}>
+      <div className="flex h-full flex-col overflow-hidden bg-ink-950 text-ink-200">
+        <TopBar />
+        <main className="relative min-h-0 flex-1">
+          {page === 'color' && <ColorPage />}
+          {page === 'media' && <MediaPage />}
+          {page === 'deliver' && <DeliverPage />}
         </main>
-
-        <ToolDock
-          adj={gradeAdj}
-          nodes={gradeNodes}
-          tab={tab}
-          onTab={setTab}
-          patch={patch}
-          commit={commit}
-          onResetNode={resetNode}
-          onToggleNode={(k) => setNodes({ [k]: !gradeNodes[k] } as Partial<NodeState>)}
-          onAuto={autoTone}
-          lumaHist={scopeRef.current.luma}
-          lumaPeak={lumaPeak}
-        />
+        <PageNav />
       </div>
 
-      {/* ============================ bottom ============================ */}
-      <div className="relative z-10 flex h-[152px] shrink-0 border-t border-line bg-panel/60 backdrop-blur-md">
-        <div className="flex min-w-0 flex-1 flex-col">
-          <NodeStrip
-            nodes={gradeNodes}
-            adj={gradeAdj}
-            selected={tab}
-            onSelect={setTab}
-            onToggle={(k) => setNodes({ [k]: !gradeNodes[k] } as Partial<NodeState>)}
-          />
-          <div className="hair h-px" />
-          <Timeline
-            items={items}
-            activeId={activeId}
-            onSelect={selectItem}
-            onAdd={() => fileRef.current?.click()}
-          />
-        </div>
-        <div className="hidden w-[262px] shrink-0 border-l border-line bg-panel/40 lg:block xl:w-[302px]">
-          <Scopes data={scopeRef.current} tick={tick} />
-        </div>
+      <Modals modal={modal} onClose={closeModal} />
+
+      <div className="pointer-events-none fixed bottom-16 right-4 z-[70] flex flex-col items-end gap-2">
+        {toasts.map((t) => (
+          <div key={t.id} className="toast-in flex max-w-[360px] items-center gap-2 rounded-lg border border-ink-600 bg-ink-800/95 px-3 py-2 text-[12px] text-ink-100 shadow-2xl backdrop-blur">
+            <Check size={13} className="shrink-0 text-accent" />
+            {t.msg}
+          </div>
+        ))}
       </div>
 
-      {/* ============================ status ============================ */}
-      <footer className="relative z-10 flex h-[24px] shrink-0 items-center gap-3 border-t border-line bg-[#080a0d] px-3 font-mono text-[9.5px] tracking-wide text-faint">
-        <span className="flex items-center gap-1.5">
-          <span className="rec-dot h-[5px] w-[5px] rounded-full bg-[#62d26f]" />
-          <span className="text-dim">GPU</span>
-          <span className="max-w-[230px] truncate">{engineInfo}</span>
-        </span>
-        <span className="h-3 w-px bg-line" />
-        <span className="tabular">
-          {active ? `${active.w}×${active.h}` : "—"} · {Math.round(zoom * 100)}%
-        </span>
-        <span className="h-3 w-px bg-line" />
-        <span className="tabular">render {ms.toFixed(1)} ms</span>
-        <span className="h-3 w-px bg-line" />
-        <span className="tabular">{items.length} clips</span>
-        <span className="ml-auto hidden items-center gap-2 lg:flex">
-          <span>
-            <Kbd>\</Kbd> compare
-          </span>
-          <span>
-            <Kbd>Y</Kbd> original
-          </span>
-          <span>
-            <Kbd>0</Kbd> reset
-          </span>
-          <span>
-            <Kbd>Ctrl</Kbd>+<Kbd>E</Kbd> export
-          </span>
-          <span>
-            <Kbd>?</Kbd> all keys
-          </span>
-        </span>
-      </footer>
+      {dragOver && (
+        <div className="pointer-events-none fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-accent bg-ink-900/90 px-14 py-10">
+            <UploadCloud size={34} className="text-accent" />
+            <div className="text-[15px] font-semibold text-ink-100">Drop to import</div>
+            <div className="text-[12px] text-ink-400">Images · .cube LUTs · .json grades</div>
+          </div>
+        </div>
+      )}
 
-      {/* ============================ overlays ============================ */}
       <input
-        ref={fileRef}
+        ref={fileInput}
         type="file"
-        accept="image/*,.json"
+        accept="image/*,.cube,.json"
         multiple
-        className="hidden"
+        hidden
         onChange={(e) => {
-          if (e.target.files?.length) onFiles(e.target.files);
-          e.target.value = "";
+          if (e.target.files?.length) importFiles(e.target.files);
+          e.target.value = '';
         }}
       />
-
-      {toast && (
-        <div className="pointer-events-none fixed bottom-[52px] left-1/2 z-40 -translate-x-1/2">
-          <div
-            className={cn(
-              "pop-in flex items-center gap-2 rounded-[7px] border bg-[#0c0f14]/95 px-3 py-1.5 shadow-[0_18px_44px_-22px_#000] backdrop-blur",
-              toast.tone === "amber" && "border-amber/45 text-amber",
-              toast.tone === "teal" && "border-teal/45 text-teal",
-              toast.tone === "flame" && "border-flame/50 text-flame",
-            )}
-          >
-            <span className="h-[6px] w-[6px] rounded-full bg-current" />
-            <span className="font-mono text-[10.5px] tracking-wide">{toast.msg}</span>
-          </div>
-        </div>
-      )}
-
-      {booting && (
-        <div className="fade-in fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#07080a]">
-          <div className="relative mb-4 flex h-12 w-12 items-center justify-center rounded-[10px] border border-amber/40 bg-[#14110b]">
-            <IconAperture width={24} height={24} className="text-amber" />
-            <span className="spin-slow absolute inset-[-5px] rounded-[13px] border border-dashed border-amber/25" />
-          </div>
-          <p className="font-display text-[13px] font-semibold tracking-[0.34em] text-txt uppercase">
-            Lumen<span className="text-amber">Grade</span>
-          </p>
-          <div className="relative mt-3 h-[3px] w-[164px] overflow-hidden rounded-full bg-[#171b22]">
-            <span className="sweep absolute inset-0 block" />
-          </div>
-          <p className="mt-3 font-mono text-[9.5px] tracking-[0.2em] text-faint uppercase">
-            compiling shaders · loading media
-          </p>
-        </div>
-      )}
-
-      <ExportModal
-        open={modal === "export"}
-        onClose={() => setModal(null)}
-        name={active?.name ?? "image"}
-        imgW={active?.w ?? 1}
-        imgH={active?.h ?? 1}
-        onExport={doExport}
-        busy={busy}
-        onSaveProject={() => {
-          download(`lumen-grade-project.json`, JSON.stringify(serialize(items, activeId), null, 2), "application/json");
-          say("Project saved to .json", "teal");
+      <input
+        ref={lutInput}
+        type="file"
+        accept=".cube"
+        multiple
+        hidden
+        onChange={(e) => {
+          if (e.target.files?.length) importLuts(Array.from(e.target.files));
+          e.target.value = '';
         }}
       />
-      <ShortcutsModal open={modal === "keys"} onClose={() => setModal(null)} />
-      <DeployModal open={modal === "deploy"} onClose={() => setModal(null)} />
-    </div>
+      <input
+        ref={gradeInput}
+        type="file"
+        accept=".json,application/json"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) loadGradeFile(f);
+          e.target.value = '';
+        }}
+      />
+    </EditorContext.Provider>
   );
-}
-
-/* ----------------------------------------------------------- helpers */
-
-function mixAdjustments(a: Adjustments, b: Adjustments, t: number): Adjustments {
-  const num = (x: number, y: number) => x + (y - x) * t;
-  const wheel = (x: { x: number; y: number; master: number }, y: { x: number; y: number; master: number }) => ({
-    x: num(x.x, y.x),
-    y: num(x.y, y.y),
-    master: num(x.master, y.master),
-  });
-  const pts = (x: { x: number; y: number }[], y: { x: number; y: number }[]) =>
-    t > 0.5 ? y.map((p) => ({ ...p })) : x.map((p) => ({ ...p }));
-  return {
-    ...a,
-    exposure: num(a.exposure, b.exposure),
-    contrast: num(a.contrast, b.contrast),
-    pivot: num(a.pivot, b.pivot),
-    highlights: num(a.highlights, b.highlights),
-    shadows: num(a.shadows, b.shadows),
-    whites: num(a.whites, b.whites),
-    blacks: num(a.blacks, b.blacks),
-    temperature: num(a.temperature, b.temperature),
-    tint: num(a.tint, b.tint),
-    vibrance: num(a.vibrance, b.vibrance),
-    saturation: num(a.saturation, b.saturation),
-    lift: wheel(a.lift, b.lift),
-    gamma: wheel(a.gamma, b.gamma),
-    gain: wheel(a.gain, b.gain),
-    offset: wheel(a.offset, b.offset),
-    curves: {
-      master: pts(a.curves.master, b.curves.master),
-      red: pts(a.curves.red, b.curves.red),
-      green: pts(a.curves.green, b.curves.green),
-      blue: pts(a.curves.blue, b.curves.blue),
-    },
-    shadowHue: b.shadowHue,
-    shadowAmt: num(a.shadowAmt, b.shadowAmt),
-    highHue: b.highHue,
-    highAmt: num(a.highAmt, b.highAmt),
-    sharpen: num(a.sharpen, b.sharpen),
-    blur: num(a.blur, b.blur),
-    bloom: num(a.bloom, b.bloom),
-    bloomThreshold: num(a.bloomThreshold, b.bloomThreshold),
-    vignette: num(a.vignette, b.vignette),
-    vignetteSoft: num(a.vignetteSoft, b.vignetteSoft),
-    grain: num(a.grain, b.grain),
-    chroma: num(a.chroma, b.chroma),
-    intensity: num(a.intensity, b.intensity),
-  };
 }

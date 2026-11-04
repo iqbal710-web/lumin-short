@@ -1,3 +1,5 @@
+# Builds the photo editor and publishes it to GitHub Pages on every push to "main".
+# One-time setup: Repository → Settings → Pages → Build and deployment → Source: "GitHub Actions"
 name: Deploy to GitHub Pages
 
 on:
@@ -19,27 +21,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
-      - name: Install
-        run: npm ci || npm install
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Build (base = repo name)
-        run: npx vite build --base=/${{ github.event.repository.name }}/
+      # --base=./ makes every asset path relative, so the site works at
+      # https://<username>.github.io/<any-repo-name>/ without editing vite.config.ts
+      - name: Build
+        run: npm run build -- --base=./
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
-          path: dist
+          path: ./dist
 
   deploy:
     needs: build
