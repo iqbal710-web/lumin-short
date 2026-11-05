@@ -287,6 +287,9 @@ export class Renderer {
       gl.uniform1f(u.u_curvesOn, U.curvesOn);
       gl.uniform1f(u.u_hueCurvesOn, U.hueCurvesOn);
       gl.uniform1f(u.u_mix, U.mix);
+      gl.uniform1f(u.u_dehaze, U.dehaze);
+      gl.uniform1f(u.u_hslOn, U.hslOn);
+      gl.uniform3fv(u.u_hsl, new Float32Array(U.hsl));
 
       gl.activeTexture(gl.TEXTURE1);
       this.lutTexture(i, () => curvesTexture(g.curves), g.curves, this.curveTex, this.curveKeys);

@@ -51,6 +51,11 @@ uniform float u_lutOn;
 uniform float u_lutAmount;
 uniform float u_lutSize;
 uniform float u_mix;
+uniform float u_dehaze;
+uniform float u_hslOn;
+uniform vec3 u_hsl[8];
+
+const float HSL_C[8] = float[8](0.0, 0.083, 0.167, 0.333, 0.5, 0.611, 0.75, 0.875);
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 const float CS = 255.0 / 256.0;
@@ -148,6 +153,17 @@ void main() {
     c = mix(ca, cm, smoothstep(0.02, 0.2, l) * 0.8);
   }
 
+  // ---- Dehaze ----
+  if (u_dehaze != 0.0) {
+    if (u_dehaze > 0.0) {
+      float veil = min(min(c.r, c.g), c.b) * u_dehaze * 0.7;
+      c = (c - veil) / max(1.0 - veil, 0.2);
+      c = (c - 0.5) * (1.0 + u_dehaze * 0.12) + 0.5;
+    } else {
+      c = mix(c, vec3(0.72), -u_dehaze * 0.35);
+    }
+  }
+
   // ---- Custom curves (master then RGB) ----
   if (u_curvesOn > 0.5) {
     vec3 cc = clamp(c, 0.0, 1.0);
@@ -170,6 +186,26 @@ void main() {
     hsv.x = fract(hsv.x + (hc.r - 0.5) * 0.5 * w + 1.0);
     hsv.y = clamp(hsv.y * mix(1.0, hc.g * 2.0, w), 0.0, 1.0);
     c = hsv2rgb(hsv) * (1.0 + (hc.b - 0.5) * 1.6 * w);
+  }
+
+  // ---- HSL mixer (8 color bands) ----
+  if (u_hslOn > 0.5) {
+    vec3 hsv = rgb2hsv(clamp(c, 0.0, 1.0));
+    float sw = smoothstep(0.03, 0.25, hsv.y);
+    float dh = 0.0;
+    float ds = 0.0;
+    float dl = 0.0;
+    for (int i = 0; i < 8; i++) {
+      float d = abs(hsv.x - HSL_C[i]);
+      d = min(d, 1.0 - d);
+      float w = 1.0 - smoothstep(0.0, 0.11, d);
+      dh += w * u_hsl[i].x;
+      ds += w * u_hsl[i].y;
+      dl += w * u_hsl[i].z;
+    }
+    hsv.x = fract(hsv.x + dh * 0.08 * sw + 1.0);
+    hsv.y = clamp(hsv.y * (1.0 + ds * sw), 0.0, 1.0);
+    c = hsv2rgb(hsv) * (1.0 + dl * 0.6 * sw);
   }
 
   // ---- Hue rotation ----

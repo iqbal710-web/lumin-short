@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { FlipHorizontal2, FlipVertical2, RotateCcw, RotateCw, Crop, Check } from 'lucide-react';
 import type { Finishing, Grade } from '../types';
 import { useEditor } from '../state/editor';
@@ -40,13 +41,111 @@ function useFinishSlider() {
   );
 }
 
+const HSL_BANDS = [
+  { name: 'Red', color: '#ef4444' },
+  { name: 'Orange', color: '#f97316' },
+  { name: 'Yellow', color: '#eab308' },
+  { name: 'Green', color: '#22c55e' },
+  { name: 'Aqua', color: '#06b6d4' },
+  { name: 'Blue', color: '#3b82f6' },
+  { name: 'Purple', color: '#8b5cf6' },
+  { name: 'Magenta', color: '#d946ef' },
+];
+
+/** Reads the current image and suggests exposure / tone / vibrance settings */
+function suggestAutoTone(img: HTMLImageElement): Partial<Grade> {
+  const W = 220;
+  const H = Math.max(1, Math.round((img.naturalHeight / img.naturalWidth) * W));
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return {};
+  ctx.drawImage(img, 0, 0, W, H);
+  const px = ctx.getImageData(0, 0, W, H).data;
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < px.length; i += 4) {
+    const l = 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+    hist[Math.min(255, Math.max(0, Math.round(l)))]++;
+  }
+  const total = W * H;
+  const pct = (p: number) => {
+    let acc = 0;
+    for (let i = 0; i < 256; i++) {
+      acc += hist[i];
+      if (acc >= total * p) return i / 255;
+    }
+    return 1;
+  };
+  const p1 = pct(0.01);
+  const p50 = Math.max(0.03, pct(0.5));
+  const p99 = pct(0.99);
+  const cl = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+  const out: Partial<Grade> = {};
+  out.exposure = Math.round(cl(2.2 * Math.log2(0.46 / p50) * 0.8, -2, 2) * 100) / 100;
+  out.blacks = Math.round(cl(-(p1 - 0.02) * 300, -50, 0));
+  out.whites = Math.round(cl((0.96 - p99) * 160, -20, 40));
+  out.highlights = p99 > 0.985 ? -25 : 0;
+  out.shadows = p50 < 0.35 ? 22 : p50 < 0.42 ? 10 : 0;
+  out.contrast = Math.round(cl((0.8 - (p99 - p1)) * 70, 0, 30));
+  out.vibrance = 14;
+  return out;
+}
+
+function HslMixer() {
+  const { selectedNode, updateGrade } = useEditor();
+  const [band, setBand] = useState(0);
+  const g = selectedNode.grade;
+  const mix = g.hslMix ?? new Array(24).fill(0);
+  const setVal = (k: number, v: number, t?: boolean) =>
+    updateGrade((gr) => {
+      const m = (gr.hslMix ?? new Array(24).fill(0)).slice();
+      m[band * 3 + k] = v;
+      return { ...gr, hslMix: m };
+    }, t);
+  return (
+    <Section title="HSL Mixer" note="node · 8 colors">
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {HSL_BANDS.map((b, i) => {
+          const used = mix[i * 3] !== 0 || mix[i * 3 + 1] !== 0 || mix[i * 3 + 2] !== 0;
+          return (
+            <button
+              key={b.name}
+              type="button"
+              title={b.name}
+              onClick={() => setBand(i)}
+              className={cn('h-6 w-6 rounded-full border-2 transition', band === i ? 'scale-110 border-white' : 'border-transparent opacity-70 hover:opacity-100')}
+              style={{ background: b.color, boxShadow: used ? '0 0 0 2px rgba(255,255,255,0.35)' : undefined }}
+            />
+          );
+        })}
+      </div>
+      <Slider label={`${HSL_BANDS[band].name} Hue`} value={mix[band * 3]} min={-100} max={100} defaultValue={0} format={signed} onChange={(v, t) => setVal(0, v, t)} />
+      <Slider label={`${HSL_BANDS[band].name} Saturation`} value={mix[band * 3 + 1]} min={-100} max={100} defaultValue={0} format={signed} onChange={(v, t) => setVal(1, v, t)} />
+      <Slider label={`${HSL_BANDS[band].name} Luminance`} value={mix[band * 3 + 2]} min={-100} max={100} defaultValue={0} format={signed} onChange={(v, t) => setVal(2, v, t)} />
+    </Section>
+  );
+}
+
 export function AdjustPalette() {
   const S = useGradeSlider();
-  const { selectedNode } = useEditor();
+  const { selectedNode, currentImage, updateGrade, toast } = useEditor();
   const g = selectedNode.grade;
+  const runAutoTone = () => {
+    if (!currentImage) {
+      toast('Open a photo first');
+      return;
+    }
+    const s = suggestAutoTone(currentImage);
+    updateGrade((gr) => ({ ...gr, ...s }));
+    toast('Auto Tone applied');
+  };
   return (
     <div className="grid gap-x-8 p-3 md:grid-cols-2 2xl:grid-cols-3">
       <div>
+        <Button variant="primary" className="mb-2 w-full" onClick={runAutoTone} title="Analyse the photo and set exposure, tones and vibrance">
+          ✨ Auto Tone
+        </Button>
         <Section title="Light" note="node">
           {S('exposure', 'Exposure', -4, 4, { step: 0.01, format: (v) => `${v > 0 ? '+' : ''}${v.toFixed(2)} EV` })}
           {S('contrast', 'Contrast', -100, 100)}
@@ -54,6 +153,7 @@ export function AdjustPalette() {
           {S('shadows', 'Shadows', -100, 100)}
           {S('whites', 'Whites', -100, 100)}
           {S('blacks', 'Blacks', -100, 100)}
+          {S('dehaze', 'Dehaze', -100, 100, { hint: 'Remove or add atmospheric haze' })}
         </Section>
       </div>
       <div>
@@ -80,6 +180,9 @@ export function AdjustPalette() {
             Highlights
           </div>
         </Section>
+      </div>
+      <div>
+        <HslMixer />
       </div>
     </div>
   );

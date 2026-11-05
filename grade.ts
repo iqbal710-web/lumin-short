@@ -49,6 +49,8 @@ export function defaultGrade(): Grade {
     sharpen: 0,
     blur: 0,
     fade: 0,
+    dehaze: 0,
+    hslMix: new Array(24).fill(0),
     splitShadowHue: 200,
     splitShadowSat: 0,
     splitHighlightHue: 35,
@@ -318,6 +320,9 @@ export interface GradeUniforms {
   splitBalance: number;
   curvesOn: number;
   hueCurvesOn: number;
+  dehaze: number;
+  hsl: number[];
+  hslOn: number;
   mix: number;
 }
 
@@ -347,6 +352,9 @@ export function gradeUniforms(g: Grade): GradeUniforms {
     splitBalance: g.splitBalance / 100,
     curvesOn: curvesActive(g.curves) ? 1 : 0,
     hueCurvesOn: hueCurvesActive(g.hueCurves) ? 1 : 0,
+    dehaze: (g.dehaze ?? 0) / 100,
+    hsl: Array.from({ length: 24 }, (_, i) => (g.hslMix?.[i] ?? 0) / 100),
+    hslOn: (g.hslMix ?? []).some((v) => v !== 0) ? 1 : 0,
     mix: g.mix / 100,
   };
 }
@@ -369,6 +377,8 @@ export function gradeFlags(g: Grade) {
     g.vibrance !== 0 ||
     g.hue !== 0 ||
     g.fade !== 0 ||
+    (g.dehaze ?? 0) !== 0 ||
+    (g.hslMix ?? []).some((v) => v !== 0) ||
     g.splitShadowSat !== 0 ||
     g.splitHighlightSat !== 0;
   const curves = curvesActive(g.curves);

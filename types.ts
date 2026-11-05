@@ -34,6 +34,8 @@ export interface Grade {
   sharpen: number; // 0..100
   blur: number; // 0..100
   fade: number; // 0..100
+  dehaze: number; // -100..100
+  hslMix: number[]; // 8 bands x [hue, sat, lum], each -100..100
   splitShadowHue: number; // 0..360
   splitShadowSat: number; // 0..100
   splitHighlightHue: number;
