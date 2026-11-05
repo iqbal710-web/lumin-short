@@ -50,6 +50,8 @@ export function defaultGrade(): Grade {
     blur: 0,
     fade: 0,
     dehaze: 0,
+    smooth: 0,
+    texKeep: 35,
     hslMix: new Array(24).fill(0),
     splitShadowHue: 200,
     splitShadowSat: 0,
@@ -321,6 +323,8 @@ export interface GradeUniforms {
   curvesOn: number;
   hueCurvesOn: number;
   dehaze: number;
+  smooth: number;
+  texKeep: number;
   hsl: number[];
   hslOn: number;
   mix: number;
@@ -353,6 +357,8 @@ export function gradeUniforms(g: Grade): GradeUniforms {
     curvesOn: curvesActive(g.curves) ? 1 : 0,
     hueCurvesOn: hueCurvesActive(g.hueCurves) ? 1 : 0,
     dehaze: (g.dehaze ?? 0) / 100,
+    smooth: (g.smooth ?? 0) / 100,
+    texKeep: (g.texKeep ?? 35) / 100,
     hsl: Array.from({ length: 24 }, (_, i) => (g.hslMix?.[i] ?? 0) / 100),
     hslOn: (g.hslMix ?? []).some((v) => v !== 0) ? 1 : 0,
     mix: g.mix / 100,
@@ -383,7 +389,7 @@ export function gradeFlags(g: Grade) {
     g.splitHighlightSat !== 0;
   const curves = curvesActive(g.curves);
   const hue = hueCurvesActive(g.hueCurves);
-  const fx = g.blur !== 0 || g.sharpen !== 0 || g.midDetail !== 0;
+  const fx = g.blur !== 0 || g.sharpen !== 0 || g.midDetail !== 0 || (g.smooth ?? 0) !== 0;
   const lut = !!g.lutId;
   return { wheels, primaries, curves, hue, fx, lut, any: wheels || primaries || curves || hue || fx || lut || g.mix !== 100 };
 }

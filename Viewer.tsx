@@ -5,9 +5,10 @@ import { useEditor } from '../state/editor';
 import { useElementSize } from '../hooks';
 import { previewSource } from '../lib/media';
 import { scopeStore } from '../lib/scopes';
-import { aspectValue } from '../lib/transform';
+import { aspectValue, transformMatrix } from '../lib/transform';
+import { beginStroke, commitStroke, maskDims, strokeLine, subscribeMaskLive } from '../lib/masks';
 import { clamp } from '../lib/grade';
-import type { CropRect } from '../types';
+import type { CropRect, MaskComp } from '../types';
 import { Button, IconBtn, Select } from './ui';
 import { cn } from '../utils/cn';
 
@@ -142,7 +143,7 @@ function CropOverlay({ crop, ratio, W, H, onChange }: { crop: CropRect; ratio: n
 const ZOOMS = [0.25, 0.5, 1, 2, 4];
 
 export function Viewer() {
-  const { edit, view, setView, luts, currentImage, current, setTransform, openImport, commit } = useEditor();
+  const { edit, view, setView, luts, currentImage, current, setTransform, openImport, commit, updateEdit } = useEditor();
   const [stageRef, stage] = useElementSize<HTMLDivElement>();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rRef = useRef<Renderer | null>(null);
@@ -187,6 +188,7 @@ export function Viewer() {
       split: view.split,
       clipping: view.clipping,
       ignoreCrop: view.cropMode,
+      previewLayer: view.maskPreview ? view.activeLayerId ?? null : null,
     });
     const w = r.canvas.width;
     const h = r.canvas.height;
@@ -215,6 +217,9 @@ export function Viewer() {
   useEffect(() => {
     schedule();
   }, [edit, view, luts, schedule]);
+
+  // live brush strokes repaint without touching the edit history
+  useEffect(() => subscribeMaskLive(schedule), [schedule]);
 
   // wheel zoom around cursor (native, non-passive)
   useEffect(() => {
@@ -245,12 +250,112 @@ export function Viewer() {
   const left = (stage.width - dw) / 2 + panNow.x;
   const top = (stage.height - dh) / 2 + panNow.y;
 
+  /* ---------------- mask tools (brush / eraser / gradient drawing) ---------------- */
+  const paint = useRef<{
+    kind: 'paint' | 'erase' | 'shape';
+    layerId: string;
+    maskId: string;
+    type: string;
+    start: [number, number];
+    last: [number, number];
+    moved: boolean;
+  } | null>(null);
+
+  const toSrc = (clientX: number, clientY: number): [number, number] | null => {
+    const c = canvasRef.current;
+    const r = rRef.current;
+    if (!c || !r || !r.hasSource) return null;
+    const rect = c.getBoundingClientRect();
+    const u = (clientX - rect.left) / rect.width;
+    const v = (clientY - rect.top) / rect.height;
+    const A = transformMatrix(r.srcW, r.srcH, latest.current.edit.transform, latest.current.view.cropMode);
+    return [A[0] * u + A[3] * v + A[6], A[1] * u + A[4] * v + A[7]];
+  };
+  const findComp = (layerId: string, maskId: string): MaskComp | null =>
+    latest.current.edit.layers?.find((l) => l.id === layerId)?.masks.find((m) => m.id === maskId) ?? null;
+  const patchComp = (layerId: string, maskId: string, patch: Partial<MaskComp>, transient: boolean) =>
+    updateEdit(
+      (ed) => ({
+        ...ed,
+        layers: (ed.layers ?? []).map((l) =>
+          l.id === layerId ? { ...l, masks: l.masks.map((m) => (m.id === maskId ? { ...m, ...patch } : m)) } : l,
+        ),
+      }),
+      transient,
+    );
+  const brushPx = () => {
+    const r = rRef.current;
+    const [mw, mh] = r ? maskDims(r.srcW, r.srcH) : [1, 1];
+    const v = latest.current.view;
+    return { mw, mh, rad: Math.max(1, ((v.brushSize ?? 0.06) * Math.max(mw, mh)) / 2) };
+  };
+  const shapePatch = (type: string, a: [number, number], b: [number, number]): Partial<MaskComp> =>
+    type === 'linear'
+      ? { x1: a[0], y1: a[1], x2: b[0], y2: b[1] }
+      : { x1: a[0], y1: a[1], x2: Math.max(0.02, Math.abs(b[0] - a[0])), y2: Math.max(0.02, Math.abs(b[1] - a[1])) };
+
+  const startPaint = (e: RPointerEvent<HTMLDivElement>): boolean => {
+    const tool = view.maskTool;
+    const lid = view.activeLayerId;
+    const mid = view.activeMaskId;
+    if (!tool || !lid || !mid || e.button !== 0 || view.cropMode) return false;
+    const comp = findComp(lid, mid);
+    const p = toSrc(e.clientX, e.clientY);
+    if (!comp || !p) return false;
+    if (tool === 'shape') {
+      if (comp.type !== 'linear' && comp.type !== 'radial') return false;
+      paint.current = { kind: 'shape', layerId: lid, maskId: mid, type: comp.type, start: p, last: p, moved: false };
+    } else {
+      if (comp.type !== 'brush' && comp.type !== 'people') return false;
+      const { mw, mh, rad } = brushPx();
+      beginStroke(comp, mw, mh);
+      strokeLine(p[0] * mw, p[1] * mh, p[0] * mw, p[1] * mh, rad, view.brushHardness ?? 0.5, view.brushFlow ?? 0.5, tool === 'erase');
+      paint.current = { kind: tool, layerId: lid, maskId: mid, type: comp.type, start: p, last: p, moved: false };
+    }
+    e.currentTarget.setPointerCapture(e.pointerId);
+    return true;
+  };
+  const movePaint = (e: RPointerEvent<HTMLDivElement>): boolean => {
+    const pt = paint.current;
+    if (!pt) return false;
+    const p = toSrc(e.clientX, e.clientY);
+    if (!p) return true;
+    pt.moved = true;
+    if (pt.kind === 'shape') {
+      patchComp(pt.layerId, pt.maskId, shapePatch(pt.type, pt.start, p), true);
+    } else {
+      const { mw, mh, rad } = brushPx();
+      const v = latest.current.view;
+      strokeLine(pt.last[0] * mw, pt.last[1] * mh, p[0] * mw, p[1] * mh, rad, v.brushHardness ?? 0.5, v.brushFlow ?? 0.5, pt.kind === 'erase');
+    }
+    pt.last = p;
+    return true;
+  };
+  const endPaint = (): boolean => {
+    const pt = paint.current;
+    if (!pt) return false;
+    paint.current = null;
+    if (pt.kind === 'shape') {
+      if (pt.moved) patchComp(pt.layerId, pt.maskId, shapePatch(pt.type, pt.start, pt.last), false);
+    } else {
+      const comp = findComp(pt.layerId, pt.maskId);
+      if (comp) {
+        const n = comp.strokes + 1;
+        commitStroke(comp, n);
+        patchComp(pt.layerId, pt.maskId, { strokes: n }, false);
+      }
+    }
+    return true;
+  };
+
   const onPointerDown = (e: RPointerEvent<HTMLDivElement>) => {
     if (view.cropMode || (e.button !== 0 && e.button !== 1)) return;
+    if (startPaint(e)) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     panDrag.current = { x: e.clientX, y: e.clientY, px: panNow.x, py: panNow.y, moved: false };
   };
   const onPointerMove = (e: RPointerEvent<HTMLDivElement>) => {
+    if (movePaint(e)) return;
     const d = panDrag.current;
     if (d) {
       const dx = e.clientX - d.x;
@@ -277,6 +382,7 @@ export function Viewer() {
     if (rgb) setProbe({ x, y, rgb });
   };
   const onPointerUp = () => {
+    if (endPaint()) return;
     panDrag.current = null;
   };
 
@@ -344,7 +450,7 @@ export function Viewer() {
 
       <div
         ref={stageRef}
-        className="checker relative min-h-0 flex-1 touch-none overflow-hidden"
+        className={cn('checker relative min-h-0 flex-1 touch-none overflow-hidden', view.maskTool && !view.cropMode && 'cursor-crosshair')}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

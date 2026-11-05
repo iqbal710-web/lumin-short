@@ -1,5 +1,6 @@
-import { FINAL_FS, GRADE_FS, VS } from './shaders';
-import type { EditState, GradeNode, LutData, ScopeData } from '../types';
+import { FINAL_FS, GRADE_FS, LAYER_FS, VS } from './shaders';
+import type { EditState, Grade, GradeNode, Layer, LutData, ScopeData } from '../types';
+import { evalLayerMask, hexToRgb, layerActive, layerMaskKey, maskDims, maskRevision } from '../lib/masks';
 import { curvesTexture, gradeUniforms, hueCurvesTexture } from '../lib/grade';
 import { outputSize, transformMatrix } from '../lib/transform';
 
@@ -22,6 +23,7 @@ export interface RenderView {
   split: number;
   clipping: boolean;
   ignoreCrop: boolean;
+  previewLayer?: string | null;
 }
 
 export const PREVIEW_MAX = 2560;
@@ -40,6 +42,7 @@ export class Renderer {
 
   private gradeProg: Program;
   private finalProg: Program;
+  private layerProg: Program;
   private vao: WebGLVertexArrayObject;
   private quad: WebGLBuffer;
   private src: WebGLTexture | null = null;
@@ -55,6 +58,12 @@ export class Renderer {
   private cachedTex: WebGLTexture | null = null;
   private cachedLutVersion = -1;
   private lutVersion = 0;
+  private layerTargets: Target[] = [];
+  private maskTex = new Map<string, { tex: WebGLTexture; key: string }>();
+  private maskW = 0;
+  private maskH = 0;
+  private maskPix: Uint8ClampedArray | null = null;
+  private composed: { nodes: GradeNode[]; lut: number; key: string; tex: WebGLTexture } | null = null;
 
   constructor(canvas: HTMLCanvasElement, opts: { preserve?: boolean; lowPrecision?: boolean } = {}) {
     const gl = canvas.getContext('webgl2', {
@@ -75,6 +84,7 @@ export class Renderer {
 
     this.gradeProg = this.createProgram(GRADE_FS);
     this.finalProg = this.createProgram(FINAL_FS);
+    this.layerProg = this.createProgram(LAYER_FS);
 
     gl.useProgram(this.gradeProg.prog);
     gl.uniform1i(this.gradeProg.u.u_image, 0);
@@ -84,6 +94,10 @@ export class Renderer {
     gl.useProgram(this.finalProg.prog);
     gl.uniform1i(this.finalProg.u.u_graded, 0);
     gl.uniform1i(this.finalProg.u.u_original, 1);
+    gl.useProgram(this.layerProg.prog);
+    gl.uniform1i(this.layerProg.u.u_base, 0);
+    gl.uniform1i(this.layerProg.u.u_top, 1);
+    gl.uniform1i(this.layerProg.u.u_mask, 2);
 
     this.vao = gl.createVertexArray()!;
     gl.bindVertexArray(this.vao);
@@ -180,6 +194,7 @@ export class Renderer {
     this.targets.forEach((t) => this.deleteTarget(t));
     this.targets = [this.createTarget(w, h, this.floatPipeline), this.createTarget(w, h, this.floatPipeline)];
     this.cachedNodes = null;
+    this.composed = null;
   }
 
   setSource(source: TexImageSource, w: number, h: number) {
@@ -196,6 +211,7 @@ export class Renderer {
     this.srcH = h;
     this.ensureTargets(w, h);
     this.cachedNodes = null;
+    this.prepareMaskSource(source, w, h);
   }
 
   setLuts(luts: Record<string, LutData>) {
@@ -244,67 +260,209 @@ export class Renderer {
     }
   }
 
+  private gradePass(input: WebGLTexture, g: Grade, t: Target, i: number, noSpatial: boolean) {
+    const gl = this.gl;
+    const P = this.gradeProg;
+    const u = P.u;
+    gl.useProgram(P.prog);
+    gl.bindVertexArray(this.vao);
+    const U = gradeUniforms(g);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
+    gl.viewport(0, 0, t.w, t.h);
+    gl.uniform2f(u.u_res, this.srcW, this.srcH);
+    gl.uniform3fv(u.u_wb, U.wb);
+    gl.uniform1f(u.u_exposure, U.exposure);
+    gl.uniform3fv(u.u_lift, U.lift);
+    gl.uniform3fv(u.u_gammaInv, U.gammaInv);
+    gl.uniform3fv(u.u_gain, U.gain);
+    gl.uniform3fv(u.u_offset, U.offset);
+    gl.uniform1f(u.u_contrast, U.contrast);
+    gl.uniform1f(u.u_pivot, U.pivot);
+    gl.uniform1f(u.u_highlights, U.highlights);
+    gl.uniform1f(u.u_shadows, U.shadows);
+    gl.uniform1f(u.u_whites, U.whites);
+    gl.uniform1f(u.u_blacks, U.blacks);
+    gl.uniform1f(u.u_saturation, U.saturation);
+    gl.uniform1f(u.u_vibrance, U.vibrance);
+    gl.uniform1f(u.u_hue, U.hue);
+    gl.uniform1f(u.u_midDetail, noSpatial ? 0 : U.midDetail);
+    gl.uniform1f(u.u_sharpen, noSpatial ? 0 : U.sharpen);
+    gl.uniform1f(u.u_blur, noSpatial ? 0 : U.blur);
+    gl.uniform1f(u.u_fade, U.fade);
+    gl.uniform3fv(u.u_splitShadow, U.splitShadow);
+    gl.uniform3fv(u.u_splitHighlight, U.splitHighlight);
+    gl.uniform1f(u.u_splitBalance, U.splitBalance);
+    gl.uniform1f(u.u_curvesOn, U.curvesOn);
+    gl.uniform1f(u.u_hueCurvesOn, U.hueCurvesOn);
+    gl.uniform1f(u.u_mix, U.mix);
+    gl.uniform1f(u.u_dehaze, U.dehaze);
+    gl.uniform1f(u.u_smooth, noSpatial ? 0 : U.smooth);
+    gl.uniform1f(u.u_texKeep, U.texKeep);
+    gl.uniform1f(u.u_hslOn, U.hslOn);
+    gl.uniform3fv(u.u_hsl, new Float32Array(U.hsl));
+
+    gl.activeTexture(gl.TEXTURE1);
+    this.lutTexture(i, () => curvesTexture(g.curves), g.curves, this.curveTex, this.curveKeys);
+    gl.activeTexture(gl.TEXTURE2);
+    this.lutTexture(i, () => hueCurvesTexture(g.hueCurves), g.hueCurves, this.hueTex, this.hueKeys);
+    const lut = g.lutId ? this.lutTex.get(g.lutId) : undefined;
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_3D, lut ? lut.tex : this.dummy3D);
+    gl.uniform1f(u.u_lutOn, lut && g.lutAmount > 0 ? 1 : 0);
+    gl.uniform1f(u.u_lutSize, lut ? lut.size : 1);
+    gl.uniform1f(u.u_lutAmount, g.lutAmount / 100);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, input);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+
+  /* ---------------- layers + masks ---------------- */
+  private prepareMaskSource(source: TexImageSource, w: number, h: number) {
+    const [mw, mh] = maskDims(w, h);
+    this.maskW = mw;
+    this.maskH = mh;
+    this.maskPix = null;
+    try {
+      const cv = document.createElement('canvas');
+      cv.width = mw;
+      cv.height = mh;
+      const cx = cv.getContext('2d', { willReadFrequently: true });
+      if (cx) {
+        cx.drawImage(source as unknown as CanvasImageSource, 0, 0, mw, mh);
+        this.maskPix = cx.getImageData(0, 0, mw, mh).data;
+      }
+    } catch {
+      this.maskPix = null;
+    }
+    this.maskTex.forEach((v) => this.gl.deleteTexture(v.tex));
+    this.maskTex.clear();
+    this.composed = null;
+  }
+
+  private ensureLayerTargets() {
+    const w = this.srcW;
+    const h = this.srcH;
+    if (this.layerTargets.length === 3 && this.layerTargets[0].w === w && this.layerTargets[0].h === h) return;
+    this.layerTargets.forEach((t) => this.deleteTarget(t));
+    this.layerTargets = [0, 1, 2].map(() => this.createTarget(w, h, this.floatPipeline));
+    this.composed = null;
+  }
+
+  private maskTexture(l: Layer): WebGLTexture | null {
+    if (!this.maskW || !l.masks.some((m) => m.enabled)) return null;
+    const key = layerMaskKey(l);
+    const e = this.maskTex.get(l.id);
+    if (e && e.key === key) return e.tex;
+    const data = evalLayerMask(l, this.maskW, this.maskH, this.maskPix);
+    if (!data) return null;
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0);
+    let tex = e?.tex;
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    if (!tex) {
+      tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, this.maskW, this.maskH, 0, gl.RED, gl.UNSIGNED_BYTE, data);
+      this.texParams(gl.TEXTURE_2D, gl.LINEAR);
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.maskW, this.maskH, gl.RED, gl.UNSIGNED_BYTE, data);
+    }
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    this.maskTex.set(l.id, { tex, key });
+    return tex;
+  }
+
+  private blendPass(
+    base: WebGLTexture,
+    top: WebGLTexture | null,
+    mask: WebGLTexture | null,
+    t: Target,
+    mode: number,
+    opacity: number,
+    color: [number, number, number],
+  ): WebGLTexture {
+    const gl = this.gl;
+    const P = this.layerProg;
+    const u = P.u;
+    gl.useProgram(P.prog);
+    gl.bindVertexArray(this.vao);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
+    gl.viewport(0, 0, t.w, t.h);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, base);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, top ?? base);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, mask ?? base);
+    gl.uniform1i(u.u_mode, mode);
+    gl.uniform1f(u.u_opacity, opacity);
+    gl.uniform1f(u.u_hasMask, mask ? 1 : 0);
+    gl.uniform3f(u.u_color, color[0], color[1], color[2]);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return t.tex;
+  }
+
+  /** Background opacity / visibility, then every visible layer through its mask */
+  private compose(graded: WebGLTexture, edit: EditState, previewId: string | null): WebGLTexture {
+    const all = edit.layers ?? [];
+    const layers = all.filter((l) => l.visible && l.opacity > 0 && layerActive(l));
+    const bg = edit.bg ?? { name: 'Background', visible: true, opacity: 100 };
+    const preview = previewId ? all.find((l) => l.id === previewId && l.masks.some((m) => m.enabled)) ?? null : null;
+    const needBg = !bg.visible || bg.opacity < 100;
+    if (!layers.length && !needBg && !preview) return graded;
+
+    const key =
+      JSON.stringify([layers.map((l) => [l.id, l.kind, l.opacity, l.color, l.grade, l.masks]), bg.visible, bg.opacity, preview ? preview.id : null]) +
+      `|${maskRevision()}|${this.maskW}x${this.maskH}`;
+    const c = this.composed;
+    if (c && c.nodes === edit.nodes && c.lut === this.lutVersion && c.key === key) return c.tex;
+
+    this.ensureLayerTargets();
+    const [T0, T1, T2] = this.layerTargets;
+    const pp = [T0, T1];
+    let ping = 0;
+    let base = graded;
+    if (needBg) {
+      base = this.blendPass(base, null, null, pp[ping], 2, bg.visible ? bg.opacity / 100 : 0, [0, 0, 0]);
+      ping ^= 1;
+    }
+    layers.forEach((l, idx) => {
+      const mask = this.maskTexture(l);
+      if (l.kind === 'filled') {
+        base = this.blendPass(base, null, mask, pp[ping], 1, l.opacity / 100, hexToRgb(l.color));
+      } else {
+        this.gradePass(base, l.grade, T2, 64 + idx, false);
+        base = this.blendPass(base, T2.tex, mask, pp[ping], 0, l.opacity / 100, [0, 0, 0]);
+      }
+      ping ^= 1;
+    });
+    if (preview) {
+      const mask = this.maskTexture(preview);
+      if (mask) {
+        base = this.blendPass(base, null, mask, pp[ping], 3, 1, [0, 0, 0]);
+        ping ^= 1;
+      }
+    }
+    this.composed = { nodes: edit.nodes, lut: this.lutVersion, key, tex: base };
+    return base;
+  }
+
   private runNodes(nodes: GradeNode[], noSpatial: boolean): WebGLTexture {
     const gl = this.gl;
     let input = this.src!;
     const active = nodes.filter((n) => n.enabled);
     if (!active.length) return input;
-    const P = this.gradeProg;
-    const u = P.u;
-    gl.useProgram(P.prog);
     gl.bindVertexArray(this.vao);
     let ping = 0;
     active.forEach((node, i) => {
       const t = this.targets[ping];
       ping ^= 1;
-      const g = node.grade;
-      const U = gradeUniforms(g);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
-      gl.viewport(0, 0, t.w, t.h);
-      gl.uniform2f(u.u_res, this.srcW, this.srcH);
-      gl.uniform3fv(u.u_wb, U.wb);
-      gl.uniform1f(u.u_exposure, U.exposure);
-      gl.uniform3fv(u.u_lift, U.lift);
-      gl.uniform3fv(u.u_gammaInv, U.gammaInv);
-      gl.uniform3fv(u.u_gain, U.gain);
-      gl.uniform3fv(u.u_offset, U.offset);
-      gl.uniform1f(u.u_contrast, U.contrast);
-      gl.uniform1f(u.u_pivot, U.pivot);
-      gl.uniform1f(u.u_highlights, U.highlights);
-      gl.uniform1f(u.u_shadows, U.shadows);
-      gl.uniform1f(u.u_whites, U.whites);
-      gl.uniform1f(u.u_blacks, U.blacks);
-      gl.uniform1f(u.u_saturation, U.saturation);
-      gl.uniform1f(u.u_vibrance, U.vibrance);
-      gl.uniform1f(u.u_hue, U.hue);
-      gl.uniform1f(u.u_midDetail, noSpatial ? 0 : U.midDetail);
-      gl.uniform1f(u.u_sharpen, noSpatial ? 0 : U.sharpen);
-      gl.uniform1f(u.u_blur, noSpatial ? 0 : U.blur);
-      gl.uniform1f(u.u_fade, U.fade);
-      gl.uniform3fv(u.u_splitShadow, U.splitShadow);
-      gl.uniform3fv(u.u_splitHighlight, U.splitHighlight);
-      gl.uniform1f(u.u_splitBalance, U.splitBalance);
-      gl.uniform1f(u.u_curvesOn, U.curvesOn);
-      gl.uniform1f(u.u_hueCurvesOn, U.hueCurvesOn);
-      gl.uniform1f(u.u_mix, U.mix);
-      gl.uniform1f(u.u_dehaze, U.dehaze);
-      gl.uniform1f(u.u_hslOn, U.hslOn);
-      gl.uniform3fv(u.u_hsl, new Float32Array(U.hsl));
-
-      gl.activeTexture(gl.TEXTURE1);
-      this.lutTexture(i, () => curvesTexture(g.curves), g.curves, this.curveTex, this.curveKeys);
-      gl.activeTexture(gl.TEXTURE2);
-      this.lutTexture(i, () => hueCurvesTexture(g.hueCurves), g.hueCurves, this.hueTex, this.hueKeys);
-      const lut = g.lutId ? this.lutTex.get(g.lutId) : undefined;
-      gl.activeTexture(gl.TEXTURE3);
-      gl.bindTexture(gl.TEXTURE_3D, lut ? lut.tex : this.dummy3D);
-      gl.uniform1f(u.u_lutOn, lut && g.lutAmount > 0 ? 1 : 0);
-      gl.uniform1f(u.u_lutSize, lut ? lut.size : 1);
-      gl.uniform1f(u.u_lutAmount, g.lutAmount / 100);
-
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, input);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      this.gradePass(input, node.grade, t, i, noSpatial);
       input = t.tex;
     });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -358,7 +516,7 @@ export class Renderer {
   /** Render the full pipeline to the canvas (canvas is resized to the output size) */
   render(edit: EditState, view: RenderView, seed = 7.31) {
     if (!this.src) return;
-    const graded = this.graded(edit);
+    const graded = this.compose(this.graded(edit), edit, view.previewLayer ?? null);
     const [w, h] = outputSize(this.srcW, this.srcH, edit.transform, view.ignoreCrop);
     if (this.canvas.width !== w) this.canvas.width = w;
     if (this.canvas.height !== h) this.canvas.height = h;
@@ -369,7 +527,7 @@ export class Renderer {
   readScope(edit: EditState, maxW = 256): ScopeData | null {
     if (!this.src) return null;
     const gl = this.gl;
-    const graded = this.graded(edit);
+    const graded = this.compose(this.graded(edit), edit, null);
     const [ow, oh] = outputSize(this.srcW, this.srcH, edit.transform, false);
     const w = Math.max(1, Math.min(maxW, ow));
     const h = Math.max(1, Math.min(256, Math.round((oh * w) / ow)));
@@ -440,6 +598,11 @@ export class Renderer {
     this.targets = [];
     this.deleteTarget(this.scopeTarget);
     this.scopeTarget = null;
+    this.layerTargets.forEach((t) => this.deleteTarget(t));
+    this.layerTargets = [];
+    this.maskTex.forEach((v) => gl.deleteTexture(v.tex));
+    this.maskTex.clear();
+    this.composed = null;
     if (this.src) gl.deleteTexture(this.src);
     this.src = null;
     [...this.curveTex, ...this.hueTex].forEach((t) => gl.deleteTexture(t));
@@ -454,6 +617,7 @@ export class Renderer {
     gl.deleteVertexArray(this.vao);
     gl.deleteProgram(this.gradeProg.prog);
     gl.deleteProgram(this.finalProg.prog);
+    gl.deleteProgram(this.layerProg.prog);
     this.cachedNodes = null;
     this.cachedTex = null;
   }

@@ -52,6 +52,8 @@ uniform float u_lutAmount;
 uniform float u_lutSize;
 uniform float u_mix;
 uniform float u_dehaze;
+uniform float u_smooth;
+uniform float u_texKeep;
 uniform float u_hslOn;
 uniform vec3 u_hsl[8];
 
@@ -109,6 +111,26 @@ void main() {
     float l = luma(c);
     float w = 1.0 - pow(abs(clamp(l, 0.0, 1.0) * 2.0 - 1.0), 2.0) * 0.7;
     c += (src - b) * u_midDetail * 1.6 * w;
+  }
+  if (u_smooth > 0.0) {
+    float aspectS = u_res.y / u_res.x;
+    float radS = 0.004 + u_smooth * 0.012;
+    vec3 accS = vec3(0.0);
+    float wsumS = 0.0;
+    for (int i = 0; i < 28; i++) {
+      float fi = float(i) + 0.5;
+      float r = sqrt(fi / 28.0);
+      float a = fi * 2.39996323;
+      vec2 off = vec2(cos(a) * aspectS, sin(a)) * r * radS;
+      vec3 t = texture(u_image, v_uv + off).rgb;
+      vec3 dd = t - src;
+      float w = exp(-dot(dd, dd) * 40.0) * (1.0 - 0.5 * r * r);
+      accS += t * w;
+      wsumS += w;
+    }
+    vec3 sm = accS / max(wsumS, 1e-4);
+    vec3 smoothed = sm + (src - sm) * u_texKeep;
+    c = mix(c, smoothed, min(u_smooth * 1.4, 1.0));
   }
   if (u_sharpen > 0.0) {
     vec2 t = 1.0 / u_res;
@@ -381,5 +403,38 @@ void main() {
   }
 
   outColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+`;
+
+/** Layer compositing: adjust (blend graded copy through mask), fill, background, mask preview */
+export const LAYER_FS = /* glsl */ `#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+out vec4 outColor;
+
+uniform sampler2D u_base;
+uniform sampler2D u_top;
+uniform sampler2D u_mask;
+uniform int u_mode;
+uniform float u_opacity;
+uniform float u_hasMask;
+uniform vec3 u_color;
+
+void main() {
+  vec3 b = texture(u_base, v_uv).rgb;
+  float m = u_hasMask > 0.5 ? texture(u_mask, v_uv).r : 1.0;
+  vec3 o = b;
+  if (u_mode == 0) {
+    vec3 t = texture(u_top, v_uv).rgb;
+    o = mix(b, t, m * u_opacity);
+  } else if (u_mode == 1) {
+    o = mix(b, u_color, m * u_opacity);
+  } else if (u_mode == 2) {
+    o = mix(vec3(0.1), b, u_opacity);
+  } else {
+    o = mix(b, vec3(1.0, 0.12, 0.28), m * 0.6);
+  }
+  outColor = vec4(o, 1.0);
 }
 `;

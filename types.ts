@@ -35,6 +35,8 @@ export interface Grade {
   blur: number; // 0..100
   fade: number; // 0..100
   dehaze: number; // -100..100
+  smooth: number; // 0..100 skin / surface smoothing
+  texKeep: number; // 0..100 texture preservation while smoothing
   hslMix: number[]; // 8 bands x [hue, sat, lum], each -100..100
   splitShadowHue: number; // 0..360
   splitShadowSat: number; // 0..100
@@ -86,10 +88,58 @@ export interface Finishing {
   chromatic: number; // 0..100 chromatic aberration
 }
 
+export type MaskType = 'brush' | 'linear' | 'radial' | 'luminosity' | 'color' | 'people';
+export type MaskOp = 'add' | 'subtract' | 'intersect';
+export type PeoplePart = 'person' | 'skin' | 'hair';
+
+/** One component of a layer mask. Several components combine with add / subtract / intersect */
+export interface MaskComp {
+  id: string;
+  type: MaskType;
+  name: string;
+  op: MaskOp;
+  invert: boolean;
+  enabled: boolean;
+  feather: number; // 0..100
+  refine: number; // -100..100 (shrink / grow edge)
+  x1: number; // gradient start / radial center (0..1 of the photo)
+  y1: number;
+  x2: number; // gradient end / radial radii
+  y2: number;
+  lumLow: number; // 0..1
+  lumHigh: number;
+  hue: number; // 0..360
+  hueRange: number; // 4..180
+  satMin: number; // 0..100
+  strokes: number; // brush data version (undo friendly)
+  part: PeoplePart;
+}
+
+export type LayerKind = 'empty' | 'filled';
+
+export interface Layer {
+  id: string;
+  name: string;
+  kind: LayerKind;
+  visible: boolean;
+  opacity: number; // 0..100
+  color: string; // filled layers
+  grade: Grade; // local adjustments (empty layers)
+  masks: MaskComp[];
+}
+
+export interface BgLayer {
+  name: string;
+  visible: boolean;
+  opacity: number;
+}
+
 export interface EditState {
   nodes: GradeNode[];
   transform: Transform;
   finishing: Finishing;
+  layers?: Layer[];
+  bg?: BgLayer;
 }
 
 export interface MediaItem {
@@ -125,6 +175,13 @@ export interface ViewOptions {
   clipping: boolean;
   cropMode: boolean;
   cinema: boolean;
+  activeLayerId?: string | null; // 'bg' = background layer
+  activeMaskId?: string | null;
+  maskTool?: 'paint' | 'erase' | 'shape' | null;
+  maskPreview?: boolean;
+  brushSize?: number; // fraction of the long edge
+  brushHardness?: number; // 0..1
+  brushFlow?: number; // 0..1
 }
 
 export interface ScopeData {
@@ -141,6 +198,6 @@ export interface ExportSettings {
 }
 
 export type ScopeType = 'waveform' | 'parade' | 'vectorscope' | 'histogram';
-export type PaletteTab = 'wheels' | 'curves' | 'adjust' | 'effects' | 'transform' | 'looks' | 'nodes';
+export type PaletteTab = 'wheels' | 'curves' | 'adjust' | 'effects' | 'transform' | 'looks' | 'nodes' | 'layers';
 export type Page = 'media' | 'color' | 'deliver';
 export type ModalId = 'shortcuts' | 'github' | 'about';
