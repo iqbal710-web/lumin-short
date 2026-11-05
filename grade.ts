@@ -69,7 +69,7 @@ export function defaultTransform(): Transform {
 }
 
 export function defaultFinishing(): Finishing {
-  return { vignette: 0, vignetteMid: 50, vignetteRound: 50, vignetteFeather: 50, grain: 0, grainSize: 25 };
+  return { vignette: 0, vignetteMid: 50, vignetteRound: 50, vignetteFeather: 50, grain: 0, grainSize: 25, halation: 0, bloom: 0, lightLeak: 0, leakHue: 25, chromatic: 0 };
 }
 
 /** Fill in any missing fields (used when loading grades / looks) */
@@ -391,6 +391,10 @@ export function editHasChanges(e: EditState): boolean {
     t.crop.w < 0.999 ||
     t.crop.h < 0.999 ||
     f.vignette !== 0 ||
-    f.grain !== 0
+    f.grain !== 0 ||
+    f.halation > 0 ||
+    f.bloom > 0 ||
+    f.lightLeak > 0 ||
+    f.chromatic > 0
   );
 }

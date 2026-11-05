@@ -114,8 +114,19 @@ export function EffectsPalette() {
           {F('grainSize', 'Size', 1, 100, (v) => v.toFixed(0))}
         </Section>
         <p className="text-[10.5px] leading-relaxed text-ink-500">
-          Node effects live inside the selected node. Vignette and grain are global finishing, so they follow your crop.
+          Node effects live inside the selected node. Vignette, grain and film look are global finishing, so they follow your crop.
         </p>
+      </div>
+      <div>
+        <Section title="Film Look" note="global">
+          {F('halation', 'Halation', 0, 100, (v) => v.toFixed(0))}
+          {F('bloom', 'Bloom / Glow', 0, 100, (v) => v.toFixed(0))}
+          {F('chromatic', 'Chromatic Aberration', 0, 100, (v) => v.toFixed(0))}
+        </Section>
+        <Section title="Light Leak" note="global">
+          {F('lightLeak', 'Amount', 0, 100, (v) => v.toFixed(0))}
+          {F('leakHue', 'Hue', 0, 360, (v) => `${v.toFixed(0)}°`)}
+        </Section>
       </div>
     </div>
   );

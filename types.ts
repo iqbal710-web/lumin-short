@@ -77,6 +77,11 @@ export interface Finishing {
   vignetteFeather: number; // 0..100
   grain: number; // 0..100
   grainSize: number; // 1..100
+  halation: number; // 0..100 red glow around highlights
+  bloom: number; // 0..100 soft glow
+  lightLeak: number; // 0..100
+  leakHue: number; // 0..360
+  chromatic: number; // 0..100 chromatic aberration
 }
 
 export interface EditState {

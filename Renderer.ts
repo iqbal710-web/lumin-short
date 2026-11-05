@@ -333,6 +333,11 @@ export class Renderer {
     gl.uniform1f(u.u_grain, f.grain / 100);
     gl.uniform1f(u.u_grainSize, f.grainSize);
     gl.uniform1f(u.u_seed, seed);
+    gl.uniform1f(u.u_halation, (f.halation ?? 0) / 100);
+    gl.uniform1f(u.u_bloom, (f.bloom ?? 0) / 100);
+    gl.uniform1f(u.u_leak, (f.lightLeak ?? 0) / 100);
+    gl.uniform1f(u.u_leakHue, (f.leakHue ?? 25) / 360);
+    gl.uniform1f(u.u_chroma, (f.chromatic ?? 0) / 100);
     gl.uniform1i(u.u_clip, view.clipping ? 1 : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.activeTexture(gl.TEXTURE0);

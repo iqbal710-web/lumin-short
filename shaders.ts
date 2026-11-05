@@ -236,6 +236,11 @@ uniform float u_grain;
 uniform float u_grainSize;
 uniform float u_seed;
 uniform int u_clip;
+uniform float u_halation;
+uniform float u_bloom;
+uniform float u_leak;
+uniform float u_leakHue;
+uniform float u_chroma;
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
@@ -256,14 +261,62 @@ float vnoise(vec2 p) {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+vec3 hsv2rgb(vec3 c) {
+  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+// Blurred bright areas only (used for halation and bloom). Radius = fraction of output height.
+vec3 glowHL(vec2 uv, float radius, float thr) {
+  float aspect = u_outSize.x / u_outSize.y;
+  vec3 acc = vec3(0.0);
+  float wsum = 0.0;
+  for (int i = 0; i < 28; i++) {
+    float fi = float(i) + 0.5;
+    float r = sqrt(fi / 28.0);
+    float a = fi * 2.39996323;
+    vec2 off = vec2(cos(a) / aspect, sin(a)) * r * radius;
+    vec3 t = texture(u_graded, (u_xform * vec3(uv + off, 1.0)).xy).rgb;
+    float w = 1.0 - 0.6 * r * r;
+    acc += max(t - thr, 0.0) * w;
+    wsum += w;
+  }
+  return acc / wsum / (1.0 - thr);
+}
+
 void main() {
   vec2 uv = v_uv;
   vec2 s = (u_xform * vec3(uv, 1.0)).xy;
   bool orig = u_mode == 1 || (u_mode == 2 && uv.x < u_split);
   vec3 c = orig ? texture(u_original, s).rgb : texture(u_graded, s).rgb;
 
+  if (!orig && u_chroma > 0.0) {
+    vec2 sh = (uv - 0.5) * u_chroma * 0.03;
+    vec2 sR = (u_xform * vec3(uv + sh, 1.0)).xy;
+    vec2 sB = (u_xform * vec3(uv - sh, 1.0)).xy;
+    c = vec3(texture(u_graded, sR).r, c.g, texture(u_graded, sB).b);
+  }
+
   if (!orig) {
     float aspect = u_outSize.x / u_outSize.y;
+    if (u_halation > 0.0) {
+      vec3 h = glowHL(uv, 0.03, 0.55);
+      float hl = dot(h, LUMA);
+      c += vec3(1.0, 0.3, 0.1) * hl * u_halation * 2.4;
+    }
+    if (u_bloom > 0.0) {
+      vec3 h = glowHL(uv, 0.06, 0.4);
+      c += h * u_bloom * 1.8;
+    }
+    if (u_leak > 0.0) {
+      float g1 = exp(-pow(distance(vec2(uv.x * aspect, uv.y), vec2(0.0, 0.3)) * 1.6, 2.0));
+      float g2 = exp(-pow(distance(vec2(uv.x * aspect, uv.y), vec2(aspect, 0.95)) * 2.1, 2.0));
+      vec3 l1 = hsv2rgb(vec3(u_leakHue, 0.85, 1.0));
+      vec3 l2 = hsv2rgb(vec3(fract(u_leakHue + 0.08), 0.75, 1.0));
+      vec3 leak = l1 * g1 + l2 * g2 * 0.7;
+      c = 1.0 - (1.0 - c) * (1.0 - clamp(leak * u_leak * 0.85, 0.0, 1.0));
+    }
     if (u_vignette != 0.0) {
       vec2 d = (uv - 0.5) * 2.0;
       float ax = mix(1.0, aspect, u_vigRound);
