@@ -25,9 +25,9 @@ jobs:
           mkdir -p app/src/components app/src/gl app/src/lib app/src/state app/src/utils app/src/assets/samples
           for f in index.html package.json tsconfig.json vite.config.ts; do cp "$f" app/; done
           for f in App.tsx main.tsx hooks.ts index.css types.ts vite-env.d.ts; do cp "$f" app/src/; done
-          for f in ColorPage CurvesPalette DeliverPage LayersPalette LeftPanel MediaPage Modals NodeEditor Scopes SliderPalettes TopBar Viewer WheelsPalette ui; do cp "$f.tsx" app/src/components/; done
+          for f in ColorPage CurvesPalette DeliverPage LayersPalette LeftPanel MediaPage Modals NodeEditor RetouchPalette Scopes SliderPalettes TopBar Viewer WheelsPalette ui; do cp "$f.tsx" app/src/components/; done
           cp Renderer.ts shaders.ts app/src/gl/
-          for f in cube grade looks masks media scopes transform; do cp "$f.ts" app/src/lib/; done
+          for f in cube grade looks masks media retouch scopes transform; do cp "$f.ts" app/src/lib/; done
           cp editor.ts app/src/state/
           cp cn.ts app/src/utils/
           cp raw-mountain.jpg app/src/assets/samples/mountain.jpg
