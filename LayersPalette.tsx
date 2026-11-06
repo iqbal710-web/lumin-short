@@ -60,12 +60,12 @@ export function LayersPalette() {
 
   const pickLayer = (l: Layer) => {
     const m = l.masks[0];
-    setView({ activeLayerId: l.id, activeMaskId: m ? m.id : null, maskTool: toolFor(m), maskPreview: false });
+    setView({ activeLayerId: l.id, activeMaskId: m ? m.id : null, retouchTool: null, maskTool: toolFor(m), maskPreview: false });
   };
   const addLayer = (l: Layer) => {
     setLayers((ls) => [...ls, l]);
     const m = l.masks.find((x) => x.type === 'brush') ?? l.masks[0];
-    setView({ activeLayerId: l.id, activeMaskId: m ? m.id : null, maskTool: toolFor(m), maskPreview: false });
+    setView({ activeLayerId: l.id, activeMaskId: m ? m.id : null, retouchTool: null, maskTool: toolFor(m), maskPreview: false });
   };
   const addEmpty = () => addLayer(newLayer('empty', `Layer ${layers.length + 1}`));
   const addFilled = () => addLayer(newLayer('filled', `Filled Layer ${layers.length + 1}`));
@@ -107,7 +107,7 @@ export function LayersPalette() {
     if (!sel) return;
     const m = makeMask(type);
     setLayers((ls) => ls.map((l) => (l.id === sel.id ? { ...l, masks: [...l.masks, m] } : l)));
-    setView({ activeMaskId: m.id, maskTool: toolFor(m) });
+    setView({ activeMaskId: m.id, retouchTool: null, maskTool: toolFor(m) });
   };
   const addPeople = async (part: PeoplePart) => {
     if (!sel || !current || !currentImage) {
@@ -117,7 +117,7 @@ export function LayersPalette() {
     const lid = sel.id;
     const m = makeMask('people', part);
     setLayers((ls) => ls.map((l) => (l.id === lid ? { ...l, masks: [...l.masks, m] } : l)));
-    setView({ activeMaskId: m.id, maskTool: 'paint' });
+    setView({ activeMaskId: m.id, retouchTool: null, maskTool: 'paint' });
     toast('Detecting… the first time downloads an AI model');
     try {
       const [mw, mh] = maskDims(current.width, current.height);
@@ -166,7 +166,7 @@ export function LayersPalette() {
     ) : null;
 
   const ToolBtn = ({ id, label }: { id: 'paint' | 'erase' | 'shape'; label: string }) => (
-    <Button variant={view.maskTool === id ? 'primary' : 'default'} className="h-7 flex-1 px-2" onClick={() => setView({ maskTool: view.maskTool === id ? null : id })}>
+    <Button variant={view.maskTool === id ? 'primary' : 'default'} className="h-7 flex-1 px-2" onClick={() => setView({ retouchTool: null, maskTool: view.maskTool === id ? null : id })}>
       {label}
     </Button>
   );
@@ -345,7 +345,7 @@ export function LayersPalette() {
                 {sel.masks.map((m) => (
                   <div
                     key={m.id}
-                    onClick={() => setView({ activeMaskId: m.id, maskTool: toolFor(m) })}
+                    onClick={() => setView({ activeMaskId: m.id, retouchTool: null, maskTool: toolFor(m) })}
                     className={cn('flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-[11.5px]', view.activeMaskId === m.id ? 'bg-ink-650 text-ink-100' : 'text-ink-300 hover:bg-ink-700')}
                   >
                     <IconBtn title={m.enabled ? 'Disable mask' : 'Enable mask'} onClick={() => patchMask(sel.id, m.id, { enabled: !m.enabled })}>

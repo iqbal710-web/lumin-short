@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { CircleDot, Crop, Images, Palette, Plus, RotateCcw, SlidersHorizontal, Sparkles, Spline, Workflow } from 'lucide-react';
+import { Camera, CircleDot, Crop, Images, Palette, Plus, RotateCcw, SlidersHorizontal, Sparkles, Spline, Workflow } from 'lucide-react';
 import type { PaletteTab } from '../types';
 import { useEditor } from '../state/editor';
 import { Viewer } from './Viewer';
@@ -10,6 +10,7 @@ import { WheelsPalette } from './WheelsPalette';
 import { CurvesPalette } from './CurvesPalette';
 import { AdjustPalette, EffectsPalette, TransformPalette } from './SliderPalettes';
 import { LayersPalette } from './LayersPalette';
+import { RetouchPalette } from './RetouchPalette';
 import { IconBtn } from './ui';
 import { cn } from '../utils/cn';
 
@@ -54,6 +55,7 @@ const TABS: { id: PaletteTab; label: string; icon: ReactNode; cls?: string }[] =
   { id: 'adjust', label: 'Adjust', icon: <SlidersHorizontal size={13} /> },
   { id: 'effects', label: 'Effects', icon: <Sparkles size={13} /> },
   { id: 'layers', label: 'Layers & Masks', icon: <Images size={13} /> },
+  { id: 'retouch', label: 'Retouch', icon: <Camera size={13} /> },
   { id: 'transform', label: 'Sizing', icon: <Crop size={13} /> },
   { id: 'looks', label: 'Looks', icon: <Palette size={13} />, cls: 'lg:hidden' },
   { id: 'nodes', label: 'Nodes', icon: <Workflow size={13} />, cls: 'xl:hidden' },
@@ -104,6 +106,8 @@ function PaletteContent({ tab }: { tab: PaletteTab }) {
       return <EffectsPalette />;
     case 'layers':
       return <LayersPalette />;
+    case 'retouch':
+      return <RetouchPalette />;
     case 'transform':
       return <TransformPalette />;
     case 'looks':

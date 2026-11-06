@@ -1,5 +1,6 @@
 import { FINAL_FS, GRADE_FS, LAYER_FS, VS } from './shaders';
 import type { EditState, Grade, GradeNode, Layer, LutData, ScopeData } from '../types';
+import { applyRetouchOp, unionRect, type Rect } from '../lib/retouch';
 import { evalLayerMask, hexToRgb, layerActive, layerMaskKey, maskDims, maskRevision } from '../lib/masks';
 import { curvesTexture, gradeUniforms, hueCurvesTexture } from '../lib/grade';
 import { outputSize, transformMatrix } from '../lib/transform';
@@ -63,6 +64,13 @@ export class Renderer {
   private maskW = 0;
   private maskH = 0;
   private maskPix: Uint8ClampedArray | null = null;
+  private srcEl: TexImageSource | null = null;
+  private rBase: Uint8ClampedArray | null = null;
+  private rWork: Uint8ClampedArray | null = null;
+  private rTex: WebGLTexture | null = null;
+  private rApplied: { id: string; n: number }[] = [];
+  private rRev = 0;
+  private cachedRev = -1;
   private composed: { nodes: GradeNode[]; lut: number; key: string; tex: WebGLTexture } | null = null;
 
   constructor(canvas: HTMLCanvasElement, opts: { preserve?: boolean; lowPrecision?: boolean } = {}) {
@@ -212,6 +220,8 @@ export class Renderer {
     this.ensureTargets(w, h);
     this.cachedNodes = null;
     this.prepareMaskSource(source, w, h);
+    this.srcEl = source;
+    this.resetRetouch();
   }
 
   setLuts(luts: Record<string, LutData>) {
@@ -318,6 +328,97 @@ export class Renderer {
   }
 
 
+  /* ---------------- retouch (clone / heal / spot / blemish / hair) ---------------- */
+  private resetRetouch() {
+    if (this.rTex) this.gl.deleteTexture(this.rTex);
+    this.rTex = null;
+    this.rBase = null;
+    this.rWork = null;
+    this.rApplied = [];
+    this.rRev++;
+    this.cachedNodes = null;
+  }
+
+  private readSourcePixels(): Uint8ClampedArray | null {
+    if (!this.srcEl) return null;
+    try {
+      const cv = document.createElement('canvas');
+      cv.width = this.srcW;
+      cv.height = this.srcH;
+      const cx = cv.getContext('2d', { willReadFrequently: true });
+      if (!cx) return null;
+      cx.drawImage(this.srcEl as unknown as CanvasImageSource, 0, 0, this.srcW, this.srcH);
+      return cx.getImageData(0, 0, this.srcW, this.srcH).data;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The texture the node chain reads: the photo with all retouch strokes replayed on it */
+  private inputTex(edit: EditState): WebGLTexture {
+    const ops = edit.retouch ?? [];
+    if (!ops.length) {
+      if (this.rApplied.length) {
+        this.rApplied = [];
+        this.rRev++;
+      }
+      return this.src!;
+    }
+    if (!this.rBase) {
+      const px = this.readSourcePixels();
+      if (!px) return this.src!;
+      this.rBase = px;
+      this.rWork = px.slice();
+      this.rApplied = [];
+    }
+    const work = this.rWork!;
+    const w = this.srcW;
+    const h = this.srcH;
+    let ok = this.rApplied.length <= ops.length;
+    for (let i = 0; ok && i < this.rApplied.length; i++) {
+      const a = this.rApplied[i];
+      const o = ops[i];
+      if (a.id !== o.id || a.n > o.pts.length / 2 || (i < this.rApplied.length - 1 && a.n !== o.pts.length / 2)) ok = false;
+    }
+    let dirty: Rect | null = null;
+    if (!ok) {
+      work.set(this.rBase);
+      this.rApplied = [];
+      dirty = [0, 0, w, h];
+    }
+    ops.forEach((o, i) => {
+      const total = o.pts.length / 2;
+      const n = this.rApplied[i]?.n ?? 0;
+      if (n < total) dirty = unionRect(dirty, applyRetouchOp(work, w, h, o, n));
+      this.rApplied[i] = { id: o.id, n: total };
+    });
+    this.rApplied.length = ops.length;
+
+    const gl = this.gl;
+    if (!this.rTex) {
+      this.rTex = gl.createTexture()!;
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.rTex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, work);
+      this.texParams(gl.TEXTURE_2D, gl.LINEAR);
+      this.rRev++;
+    } else if (dirty) {
+      const d: Rect = dirty;
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.rTex);
+      gl.pixelStorei(gl.UNPACK_ROW_LENGTH, w);
+      gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, d[0]);
+      gl.pixelStorei(gl.UNPACK_SKIP_ROWS, d[1]);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, d[0], d[1], d[2] - d[0], d[3] - d[1], gl.RGBA, gl.UNSIGNED_BYTE, work);
+      gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+      gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+      gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+      this.rRev++;
+    }
+    return this.rTex;
+  }
+
   /* ---------------- layers + masks ---------------- */
   private prepareMaskSource(source: TexImageSource, w: number, h: number) {
     const [mw, mh] = maskDims(w, h);
@@ -418,7 +519,7 @@ export class Renderer {
 
     const key =
       JSON.stringify([layers.map((l) => [l.id, l.kind, l.opacity, l.color, l.grade, l.masks]), bg.visible, bg.opacity, preview ? preview.id : null]) +
-      `|${maskRevision()}|${this.maskW}x${this.maskH}`;
+      `|${maskRevision()}|${this.maskW}x${this.maskH}|r${this.rRev}`;
     const c = this.composed;
     if (c && c.nodes === edit.nodes && c.lut === this.lutVersion && c.key === key) return c.tex;
 
@@ -452,9 +553,9 @@ export class Renderer {
     return base;
   }
 
-  private runNodes(nodes: GradeNode[], noSpatial: boolean): WebGLTexture {
+  private runNodes(nodes: GradeNode[], noSpatial: boolean, from?: WebGLTexture): WebGLTexture {
     const gl = this.gl;
-    let input = this.src!;
+    let input = from ?? this.src!;
     const active = nodes.filter((n) => n.enabled);
     if (!active.length) return input;
     gl.bindVertexArray(this.vao);
@@ -505,8 +606,10 @@ export class Renderer {
   }
 
   private graded(edit: EditState): WebGLTexture {
-    if (this.cachedNodes === edit.nodes && this.cachedTex && this.cachedLutVersion === this.lutVersion) return this.cachedTex;
-    const tex = this.runNodes(edit.nodes, false);
+    const input = this.inputTex(edit);
+    if (this.cachedNodes === edit.nodes && this.cachedTex && this.cachedLutVersion === this.lutVersion && this.cachedRev === this.rRev) return this.cachedTex;
+    const tex = this.runNodes(edit.nodes, false, input);
+    this.cachedRev = this.rRev;
     this.cachedNodes = edit.nodes;
     this.cachedTex = tex;
     this.cachedLutVersion = this.lutVersion;
@@ -603,6 +706,10 @@ export class Renderer {
     this.maskTex.forEach((v) => gl.deleteTexture(v.tex));
     this.maskTex.clear();
     this.composed = null;
+    if (this.rTex) gl.deleteTexture(this.rTex);
+    this.rTex = null;
+    this.rBase = null;
+    this.rWork = null;
     if (this.src) gl.deleteTexture(this.src);
     this.src = null;
     [...this.curveTex, ...this.hueTex].forEach((t) => gl.deleteTexture(t));

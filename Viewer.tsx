@@ -8,7 +8,8 @@ import { scopeStore } from '../lib/scopes';
 import { aspectValue, transformMatrix } from '../lib/transform';
 import { beginStroke, commitStroke, maskDims, strokeLine, subscribeMaskLive } from '../lib/masks';
 import { clamp } from '../lib/grade';
-import type { CropRect, MaskComp } from '../types';
+import type { CropRect, MaskComp, RetouchOp } from '../types';
+import { uid } from '../lib/grade';
 import { Button, IconBtn, Select } from './ui';
 import { cn } from '../utils/cn';
 
@@ -294,6 +295,63 @@ export function Viewer() {
       ? { x1: a[0], y1: a[1], x2: b[0], y2: b[1] }
       : { x1: a[0], y1: a[1], x2: Math.max(0.02, Math.abs(b[0] - a[0])), y2: Math.max(0.02, Math.abs(b[1] - a[1])) };
 
+  /* ---------------- retouch tools (clone / heal / spot / blemish / hair) ---------------- */
+  const retouchDrag = useRef<{ opId: string; last: [number, number]; r: number } | null>(null);
+
+  const startRetouch = (e: RPointerEvent<HTMLDivElement>): boolean => {
+    const tool = view.retouchTool;
+    if (!tool || e.button !== 0 || view.cropMode) return false;
+    const p = toSrc(e.clientX, e.clientY);
+    if (!p) return false;
+    const needsSource = tool === 'clone' || tool === 'heal';
+    if (needsSource && (view.settingSource || !view.cloneSource)) {
+      setView({ cloneSource: p, cloneOffset: null, settingSource: false });
+      return true;
+    }
+    let dx = 0;
+    let dy = 0;
+    if (needsSource && view.cloneSource) {
+      const off: [number, number] = view.cloneOffset ?? [view.cloneSource[0] - p[0], view.cloneSource[1] - p[1]];
+      if (!view.cloneOffset) setView({ cloneOffset: off });
+      dx = off[0];
+      dy = off[1];
+    }
+    const r = Math.max(0.002, (view.retouchSize ?? 0.04) / 2);
+    const op: RetouchOp = {
+      id: uid(),
+      tool,
+      r,
+      hardness: view.retouchHardness ?? 0.5,
+      opacity: view.retouchOpacity ?? 1,
+      dx,
+      dy,
+      pts: [p[0], p[1]],
+    };
+    updateEdit((ed) => ({ ...ed, retouch: [...(ed.retouch ?? []), op] }), true);
+    retouchDrag.current = { opId: op.id, last: p, r };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    return true;
+  };
+  const moveRetouch = (e: RPointerEvent<HTMLDivElement>): boolean => {
+    const d = retouchDrag.current;
+    if (!d) return false;
+    const p = toSrc(e.clientX, e.clientY);
+    if (!p) return true;
+    if (Math.hypot(p[0] - d.last[0], p[1] - d.last[1]) < d.r * 0.25) return true;
+    d.last = p;
+    updateEdit(
+      (ed) => ({ ...ed, retouch: (ed.retouch ?? []).map((o) => (o.id === d.opId ? { ...o, pts: [...o.pts, p[0], p[1]] } : o)) }),
+      true,
+    );
+    return true;
+  };
+  const endRetouch = (): boolean => {
+    if (!retouchDrag.current) return false;
+    retouchDrag.current = null;
+    commit();
+    return true;
+  };
+
   const startPaint = (e: RPointerEvent<HTMLDivElement>): boolean => {
     const tool = view.maskTool;
     const lid = view.activeLayerId;
@@ -350,11 +408,13 @@ export function Viewer() {
 
   const onPointerDown = (e: RPointerEvent<HTMLDivElement>) => {
     if (view.cropMode || (e.button !== 0 && e.button !== 1)) return;
+    if (startRetouch(e)) return;
     if (startPaint(e)) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     panDrag.current = { x: e.clientX, y: e.clientY, px: panNow.x, py: panNow.y, moved: false };
   };
   const onPointerMove = (e: RPointerEvent<HTMLDivElement>) => {
+    if (moveRetouch(e)) return;
     if (movePaint(e)) return;
     const d = panDrag.current;
     if (d) {
@@ -382,6 +442,7 @@ export function Viewer() {
     if (rgb) setProbe({ x, y, rgb });
   };
   const onPointerUp = () => {
+    if (endRetouch()) return;
     if (endPaint()) return;
     panDrag.current = null;
   };
@@ -450,7 +511,7 @@ export function Viewer() {
 
       <div
         ref={stageRef}
-        className={cn('checker relative min-h-0 flex-1 touch-none overflow-hidden', view.maskTool && !view.cropMode && 'cursor-crosshair')}
+        className={cn('checker relative min-h-0 flex-1 touch-none overflow-hidden', (view.maskTool || view.retouchTool) && !view.cropMode && 'cursor-crosshair')}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

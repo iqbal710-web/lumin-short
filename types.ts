@@ -88,6 +88,20 @@ export interface Finishing {
   chromatic: number; // 0..100 chromatic aberration
 }
 
+export type RetouchTool = 'clone' | 'heal' | 'spot' | 'blemish' | 'hair';
+
+/** One retouch stroke, stored in normalized photo coordinates so it replays at any resolution */
+export interface RetouchOp {
+  id: string;
+  tool: RetouchTool;
+  r: number; // radius, fraction of the long edge
+  hardness: number; // 0..1
+  opacity: number; // 0..1
+  dx: number; // clone / heal source offset (normalized)
+  dy: number;
+  pts: number[]; // x, y pairs (normalized)
+}
+
 export type MaskType = 'brush' | 'linear' | 'radial' | 'luminosity' | 'color' | 'people';
 export type MaskOp = 'add' | 'subtract' | 'intersect';
 export type PeoplePart = 'person' | 'skin' | 'hair';
@@ -140,6 +154,7 @@ export interface EditState {
   finishing: Finishing;
   layers?: Layer[];
   bg?: BgLayer;
+  retouch?: RetouchOp[];
 }
 
 export interface MediaItem {
@@ -182,6 +197,13 @@ export interface ViewOptions {
   brushSize?: number; // fraction of the long edge
   brushHardness?: number; // 0..1
   brushFlow?: number; // 0..1
+  retouchTool?: RetouchTool | null;
+  retouchSize?: number; // diameter, fraction of the long edge
+  retouchHardness?: number;
+  retouchOpacity?: number;
+  cloneSource?: [number, number] | null;
+  cloneOffset?: [number, number] | null;
+  settingSource?: boolean;
 }
 
 export interface ScopeData {
@@ -198,6 +220,6 @@ export interface ExportSettings {
 }
 
 export type ScopeType = 'waveform' | 'parade' | 'vectorscope' | 'histogram';
-export type PaletteTab = 'wheels' | 'curves' | 'adjust' | 'effects' | 'transform' | 'looks' | 'nodes' | 'layers';
+export type PaletteTab = 'wheels' | 'curves' | 'adjust' | 'effects' | 'transform' | 'looks' | 'nodes' | 'layers' | 'retouch';
 export type Page = 'media' | 'color' | 'deliver';
 export type ModalId = 'shortcuts' | 'github' | 'about';
